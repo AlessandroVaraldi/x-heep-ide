@@ -38,21 +38,24 @@ Clone X-HEEP, open the folder in VS Code, and the extension activates.
 The platform is generated from `configs/general.py` by default (see **Select Platform Configuration**); it is
 regenerated with `make mcu-gen` whenever the configuration changes.
 
-## Platform editor
+## Platform configurations
 
-Click the configuration in the status bar (or run **X-HEEP: Edit Platform**) for a form over the active
-configuration: CPU and FPU, bus, RAM banks, code size, interleaved banks, stack and heap, peripherals. It shows
-what X-HEEP's own generator reads from the configuration (`media/platform.py` runs `util/xheep_gen`), whether it
-is Python or HJSON, and says what applying costs: stack, heap and code size only change the linker script, the
-rest needs a new simulation model and, on the FPGA, a new bitstream.
+Click the configuration in the status bar to pick one of the existing configurations, or to create one:
+- **New configuration (Python)** starts from X-HEEP's `configs/general.py`, to edit as code;
+- **New configuration with the editor** (experimental) opens a form over the active configuration's values: CPU
+  and FPU, bus, RAM banks, code size, interleaved banks, stack and heap, peripherals.
 
-Apply never edits a configuration. It writes a short Python file that loads the base configuration and changes
-only what the form changed, e.g. `configs/my_soc.py` on top of `configs/general.py`; the generator checks it before
-it is saved. Editing that file again in the editor rewrites it; deleting its `# xheep-ide:` line hands it over
-to you. Address map, peripheral offsets, interrupts, pads and custom memory layouts stay in Python or HJSON.
+The editor shows what X-HEEP's own generator reads from a configuration (`media/platform.py` runs
+`util/xheep_gen`), whether it is Python or HJSON, and says what saving costs: stack, heap and code size only change
+the linker script, the rest needs a new simulation model and, on the FPGA, a new bitstream.
 
-With a hardware FPU, apps are built with `ARCH=rv32imfc_zicsr`. Bitstreams built by the extension record the
-hardware they were built for, so changing the stack or heap does not ask for a new one.
+It never edits a configuration. **Save as…** writes a short Python file that loads the starting configuration
+and changes only what the form changed, e.g. `configs/my_soc.py` on top of `configs/general.py`; the generator
+checks it first. Configurations written by the editor have an edit button in the menu, which reopens them in the
+editor; deleting their `# xheep-ide:` line hands them over to you. Address map, peripheral offsets, interrupts,
+pads and custom memory layouts stay in Python or HJSON.
+
+With a hardware FPU, apps are built with `ARCH=rv32imfc_zicsr`.
 
 ## FPGA boards and bitstreams
 
@@ -64,16 +67,13 @@ through the board's USB port. Other boards load through Vivado. The bitstream is
 file handed out with the course), or else the one built in `x-heep/build/` for the board.
 
 Building a bitstream needs Vivado: **Build Bitstream** only shows up when Vivado is installed. It builds for the
-active platform configuration (with the Xilinx BSCAN JTAG when the on-board USB adapter is selected) and writes
-`<bitstream>.xheep.json` next to the `.bit`:
+active platform configuration (with the Xilinx BSCAN JTAG when the on-board USB adapter is selected).
 
-```json
-{ "board": "pynq-z2", "config": "general.py", "configHash": "<sha1 of the configuration file>", "bscan": false, "xheepCommit": "…", "builtAt": "…" }
-```
-
-In the FPGA modes, the extension uses it to check that apps are generated for the platform the bitstream was
-built for, and offers to switch to that configuration. Ship this file along with a bitstream you hand out to get
-the same check.
+In the FPGA modes, the extension checks that apps are generated for the hardware the bitstream was built for, and
+offers to switch back to that configuration. It keeps what it knows of each bitstream in its own storage, under
+the bitstream's sha1: nothing is written next to the `.bit` or into X-HEEP, and copies are recognised. For a
+bitstream it built, it knows the platform; for one from elsewhere, it asks once which configuration it was built
+for (or "I don't know", which skips the check).
 
 ## Software-only projects
 

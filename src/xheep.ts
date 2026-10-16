@@ -1,6 +1,7 @@
 // Helpers that turn the user's choices into X-HEEP commands and files.
 // Kept free of the vscode API so the unit tests and the end-to-end test (src/test/e2e.ts) share them.
 
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -477,32 +478,23 @@ export function builtBitstream(xheep: string, board: string): string | undefined
 }
 
 /**
- * What a bitstream was built from, kept next to it in `<bitstream>.xheep.json`. The extension writes it after
- * "Build Bitstream"; whoever hands out a bitstream can ship the same file to get the platform check.
+ * What the extension knows of a bitstream, kept in its own storage under the bitstream's sha1: nothing goes next
+ * to the file or into X-HEEP. Recorded when the extension builds one; for one from elsewhere, asked once.
  */
-export interface BitstreamMeta {
-	board: string;
-	/** Platform configuration file name, for messages. */
-	config: string;
-	/** sha1 of the configuration file: the platform the apps must be generated from. */
-	configHash: string;
-	/** The hardware it was built for (platform.ts hardwareFingerprint): checked instead of configHash when present. */
+export interface BitstreamInfo {
+	/** The platform configuration it was built for, to name it and to switch back to it. */
+	config?: string;
+	/** The hardware it was built for (platform.ts hardwareFingerprint); undefined when nobody knows. */
 	hardware?: string;
 	/** Built with the Xilinx BSCAN JTAG (FUSESOC_FLAGS=--flag=use_bscane_xilinx), for the on-board USB adapter. */
-	bscan: boolean;
+	bscan?: boolean;
+	board?: string;
 	xheepCommit?: string;
-	builtAt: string;
+	builtAt?: string;
 }
 
-export const metaPath = (bitstream: string) => `${bitstream}.xheep.json`;
-
-export function readMeta(bitstream: string): BitstreamMeta | undefined {
-	try {
-		return JSON.parse(fs.readFileSync(metaPath(bitstream), 'utf8'));
-	} catch {
-		return undefined;
-	}
-}
+/** A file's sha1: what identifies a bitstream wherever it is copied. */
+export const fileSha1 = (file: string) => createHash('sha1').update(fs.readFileSync(file)).digest('hex');
 
 /**
  * Builds the bitstream with Vivado for the current platform. `make vivado-fpga` pipes fusesoc into tee,

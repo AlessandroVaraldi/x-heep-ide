@@ -124,13 +124,13 @@
       },
       {
         "command": "xheep.editPlatform",
-        "title": "Edit Platform",
+        "title": "Platform Editor (Experimental)",
         "category": "X-HEEP",
-        "icon": "$(settings-gear)"
+        "icon": "$(beaker)"
       },
       {
         "command": "xheep.selectConfig",
-        "title": "Select Platform Configuration",
+        "title": "Platform Configuration…",
         "category": "X-HEEP",
         "icon": "$(settings)"
       },
@@ -211,19 +211,9 @@
           "group": "1_project@1"
         },
         {
-          "command": "xheep.editPlatform",
-          "when": "view == xheep.apps && xheep.active",
-          "group": "3_platform@0"
-        },
-        {
           "command": "xheep.selectConfig",
           "when": "view == xheep.apps && xheep.active",
           "group": "3_platform@1"
-        },
-        {
-          "command": "xheep.newConfig",
-          "when": "view == xheep.apps && xheep.active",
-          "group": "3_platform@2"
         },
         {
           "command": "xheep.mcuGen",

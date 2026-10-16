@@ -6,11 +6,13 @@ import { Catalog, Platform, PlatformForm } from './platform';
 
 /** What the page shows. */
 export interface EditorState {
+	/** Editing in place a configuration the editor wrote, or creating one from the values of another. */
+	mode: 'edit' | 'create';
 	name: string;
 	/** The active configuration, as shown to the user. */
 	file: string;
-	/** For an overlay: the configuration it builds on. */
-	base?: string;
+	/** The configuration the result builds on: an overlay's base, or the configuration itself. */
+	base: string;
 	/** The form as the active configuration reads now. */
 	form: PlatformForm;
 	/** Read as is, for memory the form cannot represent. */
@@ -31,7 +33,8 @@ export interface EditorHost {
 	load(): Promise<EditorState | { error: string }>;
 	/** Writes the form: resolves with xheep_gen's complaint when it rejects it, or cancelled (e.g. no name given). */
 	apply(form: PlatformForm): Promise<{ error?: string; cancelled?: boolean }>;
-	switchConfig(): Promise<void>;
+	/** Creating: picks another configuration to start from. */
+	startFrom(): Promise<void>;
 	openFile(): void;
 }
 
@@ -50,7 +53,7 @@ export function openPlatformEditor(host: EditorHost) {
 		post({ type: 'busy', text: 'Reading the configuration…' });
 		const state = await host.load();
 		if (panel && 'name' in state) {
-			panel.title = `Platform: ${state.name}`;
+			panel.title = state.mode === 'create' ? 'New Platform Configuration' : `Platform: ${state.name}`;
 		}
 		post('error' in state ? { type: 'error', text: state.error } : { type: 'load', state });
 	};
@@ -62,7 +65,7 @@ export function openPlatformEditor(host: EditorHost) {
 				const { error, cancelled } = await host.apply(m.form);
 				return cancelled ? post({ type: 'idle' }) : error ? post({ type: 'error', text: error, keep: true }) : load();
 			}
-			case 'switch': await host.switchConfig(); return load();
+			case 'start': await host.startFrom(); return load();
 			case 'open': return host.openFile();
 		}
 	});
@@ -96,6 +99,7 @@ h1 { font-size: 1.4em; font-weight: 600; margin: 0; }
 code, .num { font-family: var(--mono); }
 .num { font-variant-numeric: tabular-nums; }
 a, .link { color: var(--vscode-textLink-foreground); cursor: pointer; background: none; border: 0; padding: 0; font: inherit; }
+.tag { font-size: .85em; padding: 0 6px; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--line); }
 .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 .chip.warn::before { background: var(--warn); }
@@ -146,7 +150,7 @@ footer .cost { color: var(--muted); flex: 1 1 260px; min-width: 0; }
 <div id="editor" hidden>
 	<header>
 		<h1 id="name"></h1>
-		<div class="sub"><span id="where"></span><button class="link" id="switch">Switch configuration</button><button class="link" id="open">Open as code</button><span id="chip" class="chip" hidden></span></div>
+		<div class="sub"><span id="where"></span><button class="link" id="start">Start from another configuration</button><button class="link" id="open">Open as code</button><span class="tag">Experimental</span><span id="chip" class="chip" hidden></span></div>
 	</header>
 	<section>
 		<h2>Core</h2>
@@ -213,9 +217,13 @@ const kb = n => n + ' KB';
 const hex = k => '0x' + (k * 1024).toString(16).toUpperCase().padStart(5, '0');
 
 function render() {
-	$('name').textContent = st.name;
-	$('where').innerHTML = st.base ? 'Based on <code></code>' : '<code></code>';
-	$('where').querySelector('code').textContent = st.base || st.file;
+	const creating = st.mode === 'create';
+	$('name').textContent = creating ? 'New platform configuration' : st.name;
+	$('where').innerHTML = creating ? 'Starting from <code></code>' : 'On top of <code></code>';
+	$('where').querySelector('code').textContent = creating ? st.file : st.base;
+	$('start').hidden = !creating;
+	$('open').hidden = creating;
+	$('apply').textContent = creating ? 'Save as…' : 'Apply';
 	$('cpu').innerHTML = st.catalog.cpus.map(c => '<option value="' + c + '">' + c + ' · ' + (CPU_DOC[c] || '') + '</option>').join('');
 	$('cpu').value = f.cpu;
 	const fpuOk = FPU_CPUS.includes(f.cpu);
@@ -278,7 +286,7 @@ function render() {
 	$('cost').textContent = !changed.length ? 'No changes.' : changed.length + ' change' + (changed.length > 1 ? 's' : '') + '. '
 		+ (hw.length ? 'The next build regenerates the platform and the simulation model (a few minutes); the FPGA needs a new bitstream.'
 			: 'The next build regenerates the platform (seconds). No new hardware needed.')
-		+ (st.base ? '' : ' Apply saves it as a new configuration.');
+		+ (creating ? ' Save as… creates the configuration and makes it the active one.' : '');
 	$('apply').disabled = !changed.length || notes.some(n => n[0] === 'err' && n[1] !== 'X-HEEP\\'s generator rejects this configuration:');
 	$('revert').disabled = !changed.length;
 }
@@ -292,7 +300,7 @@ $('il-size').onchange = e => { f.ilSizeKb = Number(e.target.value); render(); };
 for (const [id, k] of [['code', 'codeKb'], ['stack', 'stackKb'], ['heap', 'heapKb']]) $(id).onchange = e => { f[k] = Math.max(0, Number(e.target.value) || 0); render(); };
 $('revert').onclick = () => { f = structuredClone(st.form); error = undefined; render(); };
 $('apply').onclick = () => { error = undefined; vscode.postMessage({ type: 'apply', form: f }); };
-$('switch').onclick = () => vscode.postMessage({ type: 'switch' });
+$('start').onclick = () => vscode.postMessage({ type: 'start' });
 $('open').onclick = () => vscode.postMessage({ type: 'open' });
 vscode.postMessage({ type: 'ready' });
 </script></body></html>`;

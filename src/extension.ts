@@ -8,7 +8,7 @@ import { createHash } from 'crypto';
 import { Mode, MODES, JTAG_ADAPTERS, Adapter, boardAdapters, pickAdapter, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, simSummary, incrementalBuildCommand, verilatorRunCommand,
 	DEBUG_BUILD_ROOT, debugModelBuildCommand, debugSimCommand, openocdCommand,
 	XHEEP_GIT, XHEEP_COMMIT_URL, isCommit, cloneCommand, writeMain, projectSource, configTemplate,
-	Programmer, BOARDS, BitstreamMeta, builtBitstream, metaPath, readMeta, bitstreamBuildCommand, vivadoTcl, vivadoCommand, openocdFpgaCommand,
+	Programmer, BOARDS, BitstreamInfo, fileSha1, builtBitstream, bitstreamBuildCommand, vivadoTcl, vivadoCommand, openocdFpgaCommand,
 	EXIT_BREAKPOINT, gdbRunCommand, exitCode, regValue, pickSerialPort, serialReadCommand,
 	linkerScript, memoryRegions, stackSize, explainBuild, stackProblems, uartException, exceptionCause, printable,
 	SETUP_GUIDE, missingModulesCommand, condaEnvName, requiredVersions, verilatorVersion, veribleVersion, veribleInstallCommands,
@@ -29,6 +29,8 @@ let appItem: vscode.StatusBarItem;
 let modeItem: vscode.StatusBarItem;
 let configItem: vscode.StatusBarItem;
 let apps: AppsProvider;
+/** Kept across workspaces: what the extension knows of bitstreams (see BitstreamInfo). */
+let globalState: vscode.Memento;
 /** Build problems the extension explains itself (see reportBuildProblems). */
 let buildProblems: vscode.DiagnosticCollection;
 
@@ -187,22 +189,42 @@ async function prepare(o: Options): Promise<boolean> {
 	return o.mode !== 'sim' || modelReady(o.simulator) || buildModel(o.simulator, true);
 }
 
+/**
+ * The configuration menu: pick one, or create one as Python code or with the editor (experimental). The ones the
+ * editor wrote carry a button to edit them there.
+ */
 async function selectConfig() {
-	const item = (file: string, dir: string) => ({ label: path.basename(file).replace(/\.(py|hjson)$/, ''), description: file, file: path.join(dir, file) });
-	const mine = listConfigs(userConfigsDir()).map(f => item(f, userConfigsDir()));
-	const xheep = isProject() ? listConfigs(path.join(root, 'configs')).map(f => item(f, path.join(root, 'configs'))) : [];
-	const picked = await vscode.window.showQuickPick([
-		...(isProject() ? [{ label: 'Project', kind: vscode.QuickPickItemKind.Separator } as const] : []), ...mine,
-		...(xheep.length ? [{ label: 'X-HEEP', kind: vscode.QuickPickItemKind.Separator } as const] : []), ...xheep,
-		{ label: '$(add) New Configuration…', file: '' },
-	], { placeHolder: `Platform configuration (now: ${path.relative(projectDir(), configPath())})` });
-	if (!picked || !('file' in picked)) {
-		return;
+	type Item = vscode.QuickPickItem & { run?: () => unknown; file?: string };
+	const edit: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('edit'), tooltip: 'Edit in the platform editor (experimental)' };
+	const configs = allConfigs();
+	const items: Item[] = [];
+	for (const dir of ['Project', 'X-HEEP'] as const) {
+		const mine = configs.filter(c => c.dir === dir);
+		if (mine.length && isProject()) {
+			items.push({ label: dir, kind: vscode.QuickPickItemKind.Separator });
+		}
+		items.push(...mine.map(c => ({ label: c.name, description: path.relative(projectDir(), c.file), file: c.file, buttons: overlayOf(c.file) ? [edit] : [] })));
 	}
-	if (!picked.file) {
-		return newConfig();
-	}
-	await cfg().update('mcuConfig', path.relative(projectDir(), picked.file), vscode.ConfigurationTarget.Workspace);
+	items.push({ label: '', kind: vscode.QuickPickItemKind.Separator },
+		{ label: '$(add) New configuration (Python)…', detail: 'Starts from X-HEEP\'s general.py, to edit as code', run: newConfig },
+		{ label: '$(beaker) New configuration with the editor…', detail: 'Experimental: a form, saved as a Python configuration', run: () => openEditor() });
+	const pick = vscode.window.createQuickPick<Item>();
+	pick.items = items;
+	pick.placeholder = `Platform configuration (now: ${path.relative(projectDir(), configPath())})`;
+	const choose = async (item: Item, editIt: boolean) => {
+		pick.hide();
+		if (item.run) {
+			return item.run();
+		}
+		await cfg().update('mcuConfig', path.relative(projectDir(), item.file!), vscode.ConfigurationTarget.Workspace);
+		if (editIt) {
+			openEditor(item.file);
+		}
+	};
+	pick.onDidAccept(() => pick.selectedItems[0] && choose(pick.selectedItems[0], false));
+	pick.onDidTriggerItemButton(e => choose(e.item, true));
+	pick.onDidHide(() => pick.dispose());
+	pick.show();
 }
 
 async function newConfig() {
@@ -225,21 +247,33 @@ async function newConfig() {
 // --- Platform editor ----------------------------------------------------------
 // A form over the active configuration; Apply writes a Python overlay on top of a base configuration (platform.ts).
 
+/**
+ * What the editor is doing: editing in place a configuration it wrote (an overlay), or creating a configuration,
+ * starting from the values of another one.
+ */
+let editorMode: { edit: string } | { from: string } = { from: '' };
+
+const editorSource = () => 'edit' in editorMode ? editorMode.edit : editorMode.from;
+const overlayOf = (file: string) => file.endsWith('.py') ? overlayHeader(readText(file)) : undefined;
+/** The configuration an overlay builds on; for any other configuration, itself. */
+const baseOf = (file: string) => { const h = overlayOf(file); return h ? path.resolve(path.dirname(file), h.base) : file; };
+
 async function loadEditor(): Promise<EditorState | { error: string }> {
-	const config = configPath();
-	const read = await readPlatform(config);
+	const source = editorSource();
+	const read = await readPlatform(source);
 	if ('error' in read) {
-		return { error: `X-HEEP's generator cannot read ${path.basename(config)}: ${read.error}` };
+		return { error: `X-HEEP's generator cannot read ${path.basename(source)}: ${read.error}` };
 	}
-	const header = config.endsWith('.py') ? overlayHeader(readText(config)) : undefined;
 	const bitstream = bitstreamFile();
 	const app = appDir(currentApp());
 	const appReal = fs.existsSync(app) ? fs.realpathSync(app) : app;
 	const frame = largestFrame(stackUsage(), f => { try { return fs.realpathSync(f).startsWith(appReal + path.sep); } catch { return false; } });
+	const rel = (f: string) => path.relative(projectDir(), f);
 	return {
-		name: path.basename(config).replace(/\.(py|hjson)$/, ''),
-		file: path.relative(projectDir(), config),
-		base: header && path.relative(projectDir(), path.resolve(path.dirname(config), header.base)),
+		mode: 'edit' in editorMode ? 'edit' : 'create',
+		name: path.basename(source).replace(/\.(py|hjson)$/, ''),
+		file: rel(source),
+		base: rel(baseOf(source)),
 		form: formFromPlatform(read.platform),
 		platform: read.platform,
 		memoryEditable: plainMemory(read.platform),
@@ -252,19 +286,16 @@ async function loadEditor(): Promise<EditorState | { error: string }> {
 }
 
 /**
- * Writes the form as an overlay: over its base when the active configuration is one, else over the active
- * configuration, under a new name. xheep_gen checks it first; resolves with its complaint, if any.
+ * Writes the form as an overlay on the base: in place when editing one, else under a new name, which becomes the
+ * active configuration. xheep_gen checks it first; resolves with its complaint, if any.
  */
 async function applyEditor(form: PlatformForm): Promise<{ error?: string; cancelled?: boolean }> {
-	const config = configPath();
-	const header = config.endsWith('.py') ? overlayHeader(readText(config)) : undefined;
-	let target = config;
-	let base = header && path.resolve(path.dirname(config), header.base);
-	if (!base) {
-		base = config;
-		const stem = path.basename(config).replace(/\.(py|hjson)$/, '');
+	const source = editorSource();
+	let target = source;
+	if (!('edit' in editorMode)) {
+		const stem = path.basename(source).replace(/\.(py|hjson)$/, '');
 		const name = await vscode.window.showInputBox({
-			prompt: `Save the changes as a new platform configuration, on top of ${path.basename(config)}`,
+			prompt: 'Name of the new platform configuration',
 			value: `${stem}_custom`,
 			validateInput: v => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? 'Use letters, digits and _ (a Python module name)'
 				: fs.existsSync(path.join(userConfigsDir(), `${v}.py`)) ? 'This configuration already exists' : undefined,
@@ -274,36 +305,47 @@ async function applyEditor(form: PlatformForm): Promise<{ error?: string; cancel
 		}
 		target = path.join(userConfigsDir(), `${name}.py`);
 	}
+	const base = baseOf(source);
 	const read = await readPlatform(base);
 	if ('error' in read) {
-		return { error: `cannot read the base ${path.basename(base)}: ${read.error}` };
+		return { error: `cannot read ${path.basename(base)}: ${read.error}` };
 	}
-	const source = overlayConfig(path.basename(target, '.py'), path.relative(path.dirname(target), base),
+	const src = overlayConfig(path.basename(target, '.py'), path.relative(path.dirname(target), base),
 		formFromPlatform(read.platform), form, read.catalog, plainMemory(read.platform));
 	// Checked in place, as mcu-gen would build it, so its path to the base resolves the same.
 	fs.mkdirSync(path.dirname(target), { recursive: true });
 	const draft = path.join(path.dirname(target), `.${path.basename(target, '.py')}.check.py`);
-	fs.writeFileSync(draft, source);
+	fs.writeFileSync(draft, src);
 	const check = await platformScript('check', draft);
 	fs.rmSync(draft, { force: true });
 	if (check.error) {
 		return { error: check.error };
 	}
-	fs.writeFileSync(target, source);
-	if (target !== config) {
+	fs.writeFileSync(target, src);
+	editorMode = { edit: target };
+	if (target !== configPath()) {
 		await cfg().update('mcuConfig', path.relative(projectDir(), target), vscode.ConfigurationTarget.Workspace);
 	}
 	refreshUi();
 	return {};
 }
 
-function editPlatform() {
+/** Opens the editor: on `file` in place when it wrote it, else to create a configuration starting from it. */
+function openEditor(file = configPath()) {
+	editorMode = overlayOf(file) ? { edit: file } : { from: file };
 	openPlatformEditor({
 		load: loadEditor,
 		apply: applyEditor,
-		switchConfig: selectConfig,
-		openFile: () => vscode.window.showTextDocument(vscode.Uri.file(configPath())),
+		startFrom: async () => {
+			const picked = await vscode.window.showQuickPick(allConfigs().map(c => ({ label: c.name, description: path.relative(projectDir(), c.file), file: c.file })),
+				{ placeHolder: 'Start the new configuration from' });
+			if (picked) {
+				editorMode = { from: picked.file };
+			}
+		},
+		openFile: () => vscode.window.showTextDocument(vscode.Uri.file(editorSource())),
 	});
+	refreshPlatformEditor(); // already open: show the new subject
 }
 
 // --- FPGA bitstream ---------------------------------------------------------
@@ -352,44 +394,87 @@ async function loadFpga(tool: Programmer, bitstream?: string): Promise<boolean> 
 	return ok;
 }
 
+/** sha1 of bitstreams by path and mtime: a bitstream is a few MB, read once per change. */
+const bitstreamShas = new Map<string, string>();
+
+function bitstreamSha(bitstream: string): string {
+	const key = `${bitstream}@${fs.statSync(bitstream).mtimeMs}`;
+	if (!bitstreamShas.has(key)) {
+		bitstreamShas.set(key, fileSha1(bitstream));
+	}
+	return bitstreamShas.get(key)!;
+}
+
+/** What the extension knows of the bitstream; undefined when it never saw it. */
+function bitstreamInfo(bitstream: string): BitstreamInfo | undefined {
+	return globalState.get<Record<string, BitstreamInfo>>('bitstreams', {})[bitstreamSha(bitstream)];
+}
+
+function rememberBitstream(bitstream: string, info: BitstreamInfo) {
+	return globalState.update('bitstreams', { ...globalState.get('bitstreams', {}), [bitstreamSha(bitstream)]: info });
+}
+
+/** Every configuration to pick from: the project's, then X-HEEP's. */
+function allConfigs(): { name: string; file: string; dir: 'Project' | 'X-HEEP' }[] {
+	const of = (dir: string, kind: 'Project' | 'X-HEEP') => listConfigs(dir).map(f => ({ name: f.replace(/\.(py|hjson)$/, ''), file: path.join(dir, f), dir: kind }));
+	return [...of(userConfigsDir(), isProject() ? 'Project' : 'X-HEEP'), ...(isProject() ? of(path.join(root, 'configs'), 'X-HEEP') : [])];
+}
+
+/** For a bitstream from elsewhere, asks once which configuration it was built for; Escape asks again next time. */
+async function askBitstreamPlatform(bitstream: string): Promise<void> {
+	const picked = await vscode.window.showQuickPick([
+		...allConfigs().map(c => ({ label: c.name, description: path.relative(projectDir(), c.file), file: c.file })),
+		{ label: '', kind: vscode.QuickPickItemKind.Separator, file: '' },
+		{ label: 'I don\'t know', detail: 'Skip the check that apps fit this bitstream', file: '' },
+	], { placeHolder: `Which platform configuration was ${path.basename(bitstream)} built for? (asked once)`, ignoreFocusOut: true });
+	if (!picked) {
+		return;
+	}
+	const read = picked.file ? await readPlatform(picked.file) : undefined;
+	await rememberBitstream(bitstream, picked.file
+		? { config: picked.file, hardware: read && 'platform' in read ? hardwareFingerprint(read.platform) : undefined }
+		: {});
+}
+
 /**
  * Apps must be generated from the platform the bitstream was built for (memory map, peripherals): on a mismatch,
- * offers to switch to that configuration if it is around. True to go on.
+ * offers to switch back to that configuration if it is still there. True to go on.
  */
 async function bitstreamFitsPlatform(bitstream: string): Promise<boolean> {
 	if (await bitstreamMatches(bitstream) !== false) {
 		return true;
 	}
-	const meta = readMeta(bitstream)!;
-	// The same configuration may sit under another name: match by content.
-	const match = [userConfigsDir(), path.join(root, 'configs')]
-		.flatMap(d => listConfigs(d).map(f => path.join(d, f))).find(f => fileHash(f) === meta.configHash);
-	const use = match && `Use ${path.basename(match)}`;
+	const info = bitstreamInfo(bitstream)!;
+	const back = info.config && fs.existsSync(info.config) ? info.config : undefined;
+	const use = back && `Use ${path.basename(back)}`;
 	const pick = await vscode.window.showWarningMessage(
-		`The FPGA bitstream was built for the platform "${meta.config}", but the active one is "${path.basename(configPath())}". `
-		+ 'Apps generated for another platform may not run correctly.', { modal: true }, ...(use ? [use] : []), 'Continue Anyway');
-	if (match && pick === use) {
-		await cfg().update('mcuConfig', path.relative(projectDir(), match), vscode.ConfigurationTarget.Workspace);
+		`The FPGA bitstream was built for the platform "${path.basename(info.config ?? '?')}", but the active one, "${path.basename(configPath())}", `
+		+ 'has other hardware. Apps generated for it may not run correctly.', { modal: true }, ...(use ? [use] : []), 'Continue Anyway');
+	if (back && pick === use) {
+		await cfg().update('mcuConfig', path.relative(projectDir(), back), vscode.ConfigurationTarget.Workspace);
 	}
 	return !!pick;
 }
 
 /**
- * Whether the bitstream was built for the active platform's hardware; undefined without metadata. Stack, heap and
- * the code/data split only change the linker script, so they never call for a new bitstream.
+ * Whether the bitstream was built for the active platform's hardware; undefined when that is not known. Stack,
+ * heap and the code/data split only change the linker script, so they never call for a new bitstream.
  */
 async function bitstreamMatches(bitstream: string): Promise<boolean | undefined> {
-	const meta = readMeta(bitstream);
-	if (!meta?.hardware) {
-		return meta && meta.configHash === fileHash(configPath());
+	const hardware = bitstreamInfo(bitstream)?.hardware;
+	if (!hardware) {
+		return undefined;
 	}
 	const read = await readPlatform(configPath());
-	return 'platform' in read ? meta.hardware === hardwareFingerprint(read.platform) : undefined;
+	return 'platform' in read ? hardware === hardwareFingerprint(read.platform) : undefined;
 }
 
 /** Bitstream and tool for the FPGA modes, after the platform check; undefined fields when there is nothing to load. */
 async function fpgaSetup(): Promise<{ bitstream?: string; tool?: Programmer } | undefined> {
 	const bitstream = bitstreamFile();
+	if (bitstream && !bitstreamInfo(bitstream)) {
+		await askBitstreamPlatform(bitstream);
+	}
 	if (bitstream && !await bitstreamFitsPlatform(bitstream)) {
 		return undefined;
 	}
@@ -414,6 +499,9 @@ async function programFpga() {
 			+ (BOARDS[fpgaBoard()]?.part ? ' without Vivado.' : '. Program it with the board\'s own tools.'));
 		return;
 	}
+	if (!bitstreamInfo(bitstream)) {
+		await askBitstreamPlatform(bitstream);
+	}
 	if (await bitstreamFitsPlatform(bitstream) && await loadFpga(tool, bitstream)) {
 		vscode.window.showInformationMessage(`X-HEEP: FPGA programmed with ${path.basename(bitstream)}.`);
 	}
@@ -433,17 +521,16 @@ async function buildBitstream() {
 	}
 	const config = configPath();
 	const read = await readPlatform(config);
-	const meta: Omit<BitstreamMeta, 'builtAt'> = {
-		board, config: path.basename(config), configHash: fileHash(config), bscan, xheepCommit: await gitHead(),
-		hardware: 'platform' in read ? hardwareFingerprint(read.platform) : undefined,
+	const info: BitstreamInfo = {
+		board, config, bscan, xheepCommit: await gitHead(), hardware: 'platform' in read ? hardwareFingerprint(read.platform) : undefined,
 	};
 	if (!await runQuiet(`Building the ${board} bitstream with Vivado (this takes a while)`, makeTask('Build bitstream', bitstreamBuildCommand(board, bscan)), true)) {
 		return;
 	}
 	const bitstream = builtBitstream(root, board)!;
-	fs.writeFileSync(metaPath(bitstream), JSON.stringify({ ...meta, builtAt: new Date().toISOString() }, null, 2) + '\n');
+	await rememberBitstream(bitstream, { ...info, builtAt: new Date().toISOString() });
 	const elsewhere = !!cfg().get<string>('bitstream', '').trim();
-	const pick = await vscode.window.showInformationMessage(`X-HEEP: bitstream ready (${meta.config}).`
+	const pick = await vscode.window.showInformationMessage(`X-HEEP: bitstream ready (${path.basename(config)}).`
 		+ (elsewhere ? ' "xheep.bitstream" points to another file.' : ''), elsewhere ? 'Use the New Bitstream' : 'Program FPGA');
 	if (pick === 'Use the New Bitstream') {
 		await cfg().update('bitstream', undefined, vscode.ConfigurationTarget.Workspace);
@@ -653,7 +740,7 @@ async function jtagAdapter(ask: boolean): Promise<JtagAdapter | undefined> {
 	}
 	const bitstream = bitstreamFile();
 	const plugged = new Set(usbDevices().map(d => `${d.vid}:${d.pid}`));
-	const { adapter, choices } = pickAdapter(boardAdapters(fpgaBoard(), bitstream ? readMeta(bitstream)?.bscan : undefined), usb => plugged.has(usb));
+	const { adapter, choices } = pickAdapter(boardAdapters(fpgaBoard(), bitstream ? bitstreamInfo(bitstream)?.bscan : undefined), usb => plugged.has(usb));
 	if (adapter || !ask) {
 		return remember(adapter);
 	}
@@ -1437,7 +1524,7 @@ async function checkHardware(report: Report) {
 			needed.set(adapter.usb, `${adapter.label} (JTAG)`);
 		} else if (!adapter) {
 			const bitstream = bitstreamFile();
-			const fit = boardAdapters(fpgaBoard(), bitstream ? readMeta(bitstream)?.bscan : undefined).filter(a => !a.bscan);
+			const fit = boardAdapters(fpgaBoard(), bitstream ? bitstreamInfo(bitstream)?.bscan : undefined).filter(a => !a.bscan);
 			report('fail', 'JTAG adapter: none connected', `connect ${fit.map(a => a.label).join(' or ')} to X-HEEP's PMOD JTAG pins`);
 		}
 	}
@@ -1530,8 +1617,8 @@ async function checkEnv(quiet = false) {
 			note('FPGA programmer: none, needed in the FPGA modes (OpenOCD on the PYNQ-Z2, Vivado elsewhere)');
 		}
 		const bitstream = bitstreamFile();
-		const meta = bitstream ? readMeta(bitstream) : undefined;
-		note(`Bitstream: ${bitstream ? `${bitstream}${meta ? ` (built for ${meta.config})` : ''}`
+		const built = bitstream ? bitstreamInfo(bitstream)?.config : undefined;
+		note(`Bitstream: ${bitstream ? `${bitstream}${built ? ` (built for ${path.basename(built)})` : ''}`
 			: `none for ${fpgaBoard()}: set "xheep.bitstream"${hasVivado ? ' or run Build Bitstream' : ''}`}`);
 		if (fpga) {
 			await checkHardware(report);
@@ -1658,6 +1745,7 @@ export function activate(context: vscode.ExtensionContext) {
 	swRoot = path.join(dir, 'sw');
 	vscode.commands.executeCommand('setContext', 'xheep.active', true);
 	state = context.workspaceState;
+	globalState = context.globalState;
 	// A build cut short by closing the window would otherwise spin forever.
 	state.update('buildStatus', Object.fromEntries(Object.entries(state.get<Record<string, BuildStatus>>('buildStatus', {})).filter(([, v]) => v !== 'running')));
 	apps = new AppsProvider();
@@ -1669,8 +1757,8 @@ export function activate(context: vscode.ExtensionContext) {
 	modeItem.command = 'xheep.selectMode';
 	modeItem.tooltip = 'X-HEEP run mode';
 	configItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 7);
-	configItem.command = 'xheep.editPlatform';
-	configItem.tooltip = 'X-HEEP platform configuration: click to edit';
+	configItem.command = 'xheep.selectConfig';
+	configItem.tooltip = 'X-HEEP platform configuration';
 	const runItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 8);
 	runItem.command = 'xheep.run';
 	runItem.text = '$(play)';
@@ -1697,7 +1785,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('xheep.mcuGen', mcuGen),
 		vscode.commands.registerCommand('xheep.selectConfig', selectConfig),
 		vscode.commands.registerCommand('xheep.newConfig', newConfig),
-		vscode.commands.registerCommand('xheep.editPlatform', editPlatform),
+		vscode.commands.registerCommand('xheep.editPlatform', () => openEditor()),
 		vscode.commands.registerCommand('xheep.buildSimModel', buildSimModel),
 		vscode.commands.registerCommand('xheep.programFpga', programFpga),
 		vscode.commands.registerCommand('xheep.buildBitstream', buildBitstream),

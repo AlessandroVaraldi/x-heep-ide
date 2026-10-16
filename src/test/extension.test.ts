@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { Options, buildCommand, simCommand, simModelBuildCommand, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand, debugModelBuildCommand, debugSimCommand, cloneCommand,
-	builtBitstream, bitstreamBuildCommand, vivadoTcl, openocdFpgaCommand, readMeta, metaPath,
+	builtBitstream, bitstreamBuildCommand, vivadoTcl, openocdFpgaCommand, fileSha1,
 	gdbRunCommand, exitCode, regValue, pickSerialPort, serialReadCommand,
 	memoryRegions, stackSize, explainBuild, stackProblems, uartException, exceptionCause, printable,
 	condaEnvName, requiredVersions, verilatorVersion, veribleVersion, veribleInstallCommands, usbDevices, udevRule, missingModulesCommand,
@@ -122,11 +122,11 @@ suite('FPGA bitstream', () => {
 		assert.ok(vivadoTcl('xc7z020').includes('get_hw_devices xc7z020*'));
 	});
 
-	test('bitstream metadata sits next to the bitstream', () => {
-		const bit = path.join(fakeXheep(), 'x.bit');
-		assert.strictEqual(readMeta(bit), undefined);
-		fs.writeFileSync(metaPath(bit), JSON.stringify({ board: 'pynq-z2', config: 'ci.hjson', configHash: 'abc', bscan: false, builtAt: '' }));
-		assert.strictEqual(readMeta(bit)?.config, 'ci.hjson');
+	test('a bitstream is known by its content, wherever it is copied', () => {
+		const dir = fakeXheep();
+		fs.writeFileSync(path.join(dir, 'a.bit'), 'bits');
+		fs.copyFileSync(path.join(dir, 'a.bit'), path.join(dir, 'copy.bit'));
+		assert.strictEqual(fileSha1(path.join(dir, 'copy.bit')), fileSha1(path.join(dir, 'a.bit')));
 	});
 });
 
