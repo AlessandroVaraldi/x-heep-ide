@@ -112,7 +112,7 @@
       },
       {
         "command": "xheep.debug",
-        "title": "Debug Application on FPGA (JTAG)",
+        "title": "Debug Application",
         "category": "X-HEEP",
         "icon": "$(debug-alt)"
       },
@@ -121,6 +121,12 @@
         "title": "Open Serial Monitor",
         "category": "X-HEEP",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "xheep.editPlatform",
+        "title": "Edit Platform",
+        "category": "X-HEEP",
+        "icon": "$(settings-gear)"
       },
       {
         "command": "xheep.selectConfig",
@@ -142,6 +148,18 @@
       {
         "command": "xheep.buildSimModel",
         "title": "Rebuild Simulation Model",
+        "category": "X-HEEP",
+        "icon": "$(circuit-board)"
+      },
+      {
+        "command": "xheep.programFpga",
+        "title": "Program FPGA",
+        "category": "X-HEEP",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "xheep.buildBitstream",
+        "title": "Build Bitstream (Vivado)",
         "category": "X-HEEP",
         "icon": "$(circuit-board)"
       },
@@ -193,6 +211,11 @@
           "group": "1_project@1"
         },
         {
+          "command": "xheep.editPlatform",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "3_platform@0"
+        },
+        {
           "command": "xheep.selectConfig",
           "when": "view == xheep.apps && xheep.active",
           "group": "3_platform@1"
@@ -221,6 +244,16 @@
           "command": "xheep.openSerial",
           "when": "view == xheep.apps && xheep.active",
           "group": "2_run@2"
+        },
+        {
+          "command": "xheep.programFpga",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "2_run@3"
+        },
+        {
+          "command": "xheep.buildBitstream",
+          "when": "view == xheep.apps && xheep.active && xheep.hasVivado",
+          "group": "3_platform@5"
         },
         {
           "command": "xheep.checkEnv",
@@ -315,6 +348,18 @@
         {
           "command": "xheep.newConfig",
           "when": "xheep.active"
+        },
+        {
+          "command": "xheep.programFpga",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.buildBitstream",
+          "when": "xheep.active && xheep.hasVivado"
+        },
+        {
+          "command": "xheep.editPlatform",
+          "when": "xheep.active"
         }
       ]
     },
@@ -358,15 +403,44 @@
           "type": "string",
           "enum": [
             "pynq-z2",
-            "nexys-a7-100t",
-            "zcu104",
-            "zcu102",
-            "genesys2",
             "aup-zu3",
+            "nexys-a7-100t",
+            "genesys2",
+            "zcu102",
+            "zcu104",
             "vpk180"
           ],
           "default": "pynq-z2",
-          "description": "FPGA board the bitstream was built for (make TARGET)."
+          "description": "FPGA board the bitstream is built for (make TARGET).",
+          "enumDescriptions": [
+            "TUL PYNQ-Z2 (officially supported)",
+            "RealDigital AUP-ZU3 (officially supported)",
+            "Not officially supported: may work, untested by the extension",
+            "Not officially supported: may work, untested by the extension",
+            "Not officially supported: may work, untested by the extension",
+            "Not officially supported: may work, untested by the extension",
+            "Not officially supported: may work, untested by the extension"
+          ]
+        },
+        "xheep.bitstream": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "FPGA bitstream (`.bit`) loaded in the FPGA modes, relative to the project folder. Empty: the one built in X-HEEP for `#xheep.fpgaBoard#`, if any. A `<bitstream>.xheep.json` next to it (written by **Build Bitstream**) lets the extension check the bitstream matches the platform configuration."
+        },
+        "xheep.fpgaProgrammer": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "openocd",
+            "vivado"
+          ],
+          "enumDescriptions": [
+            "OpenOCD where it can reach the board's FPGA (PYNQ-Z2), else Vivado",
+            "OpenOCD (no Vivado needed)",
+            "Vivado hardware manager"
+          ],
+          "default": "auto",
+          "description": "Tool that loads the bitstream into the FPGA."
         },
         "xheep.openocdPath": {
           "type": "string",
@@ -375,13 +449,13 @@
         },
         "xheep.openocdConfig": {
           "type": "string",
-          "enum": [
-            "tb/core-v-mini-mcu-pynq-z2-bscan.cfg",
+          "default": "",
+          "examples": [
             "tb/core-v-mini-mcu-esl-programmer.cfg",
+            "tb/core-v-mini-mcu-pynq-z2-bscan.cfg",
             "tb/core-v-mini-mcu-nexsys-hs2.cfg"
           ],
-          "default": "tb/core-v-mini-mcu-pynq-z2-bscan.cfg",
-          "description": "OpenOCD configuration (relative to the X-HEEP root) for the JTAG adapter."
+          "markdownDescription": "OpenOCD configuration for the JTAG adapter, relative to the X-HEEP root. Empty: chosen from the adapter plugged in among those fitting `#xheep.fpgaBoard#` and the bitstream (EPFL programmer, PYNQ-Z2 on-board USB with a BSCAN bitstream, Digilent JTAG-HS2), asking when that is not clear."
         },
         "xheep.serialPort": {
           "type": "string",

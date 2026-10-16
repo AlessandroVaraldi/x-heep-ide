@@ -6,17 +6,75 @@ Clone X-HEEP, open the folder in VS Code, and the extension activates.
 ## Features
 
 - **Applications view** (X-HEEP icon in the activity bar): lists `sw/applications`, with inline Build / Run / Debug.
-- **Run modes** (status bar): pick how *Run* behaves:
-  - **Simulation**: `make <simulator>-run-app` (builds the RTL model first if missing).
-  - **FPGA · JTAG Debug**: builds for the board, starts OpenOCD and a GDB session (breaks at `main`).
-  - **FPGA · Flash**: builds with `LINKER=flash_load`, runs `make flash-prog`, opens the UART.
-- **Problems panel**: compiler errors and warnings from builds.
+- **Run modes** (status bar): where *Run* and *Debug* take the app:
+  - **Simulation**: Run simulates the app on the RTL model (built first if missing); Debug runs GDB on a
+    JTAG-enabled model.
+  - **FPGA · JTAG**: loads the bitstream if needed and the app into X-HEEP's RAM over JTAG (OpenOCD). Run runs it
+    like a simulation; Debug opens a GDB session. Each run starts from a reset X-HEEP, also when the CPU hung.
+    The JTAG adapter is the one plugged in among those fitting the board and the bitstream (EPFL programmer,
+    PYNQ-Z2 on-board USB with a BSCAN bitstream, Digilent JTAG-HS2); `xheep.openocdConfig` forces one.
+  - **FPGA · Flash**: the app goes into the SPI flash and X-HEEP boots it by itself, as the chip would (no
+    debugger): builds with `LINKER=flash_load`, clears the FPGA, runs `make flash-prog` and reloads the bitstream;
+    with the boot select switch on flash, the app starts right away.
+- **UART output** in the *X-HEEP UART* panel, for simulations and the board alike, each run under a header and
+  closed by its exit code: runs and debug sessions end by themselves when the program reaches `_exit`. The board's
+  UART is found by itself with the EPFL programmer (or set `xheep.serialPort`); **Open Serial Monitor** gives an
+  interactive terminal instead.
+- **Problems panel**: compiler errors and warnings from builds, plus what X-HEEP newcomers trip on, explained:
+  an app that does not fit in memory, functions that need an operating system (`sleep`, `pthread_*`), functions
+  whose stack frame exceeds X-HEEP's stack (from GCC's `-fstack-usage`).
+- **Run failures explained**: a program that hits an exception stops with it (and, on the board, where it
+  happened); an address outside the memory map in simulation is reported as such; on the board, Cancel tells
+  where a program that does not end is, or that it hangs on a memory access nobody answers.
 - **IntelliSense**: every build writes `sw/build/compile_commands.json`, used by the C/C++ extension.
-- **Environment check**: conda env, RISC-V toolchain, mcu-gen output, fusesoc, simulator, OpenOCD, picocom, with one-click fixes.
+- **Environment check** (at startup, on demand, and when switching to an FPGA mode), saying what to do for each
+  problem, with one-click fixes:
+  - the Python environment: no conda, no such environment, or missing X-HEEP packages (`make conda`);
+  - the RISC-V toolchain, Verilator and verible against the versions in X-HEEP's setup guide (an old verible makes
+    platform generation reformat X-HEEP's own files), with the install commands;
+  - in the FPGA modes, the hardware: JTAG adapter, EPFL programmer and board connected and usable (udev rule),
+    the UART (dialout group), iceprog's libftdi; OpenOCD, picocom and Vivado otherwise reported as optional.
 
-The extension assumes the bitstream is already on the FPGA and the platform is generated from `configs/general.py`.
-If the platform is missing, it offers to run `make mcu-gen`.
- 
+The platform is generated from `configs/general.py` by default (see **Select Platform Configuration**); it is
+regenerated with `make mcu-gen` whenever the configuration changes.
+
+## Platform editor
+
+Click the configuration in the status bar (or run **X-HEEP: Edit Platform**) for a form over the active
+configuration: CPU and FPU, bus, RAM banks, code size, interleaved banks, stack and heap, peripherals. It shows
+what X-HEEP's own generator reads from the configuration (`media/platform.py` runs `util/xheep_gen`), whether it
+is Python or HJSON, and says what applying costs: stack, heap and code size only change the linker script, the
+rest needs a new simulation model and, on the FPGA, a new bitstream.
+
+Apply never edits a configuration. It writes a short Python file that loads the base configuration and changes
+only what the form changed, e.g. `configs/my_soc.py` on top of `configs/general.py`; the generator checks it before
+it is saved. Editing that file again in the editor rewrites it; deleting its `# xheep-ide:` line hands it over
+to you. Address map, peripheral offsets, interrupts, pads and custom memory layouts stay in Python or HJSON.
+
+With a hardware FPU, apps are built with `ARCH=rv32imfc_zicsr`. Bitstreams built by the extension record the
+hardware they were built for, so changing the stack or heap does not ask for a new one.
+
+## FPGA boards and bitstreams
+
+Officially supported boards: **PYNQ-Z2** and **AUP-ZU3**. The other X-HEEP boards can be selected in
+`xheep.fpgaBoard`, untested.
+
+Loading a bitstream needs no Vivado on the PYNQ-Z2: OpenOCD, already needed for JTAG debugging, programs the FPGA
+through the board's USB port. Other boards load through Vivado. The bitstream is `xheep.bitstream` (e.g. a `.bit`
+file handed out with the course), or else the one built in `x-heep/build/` for the board.
+
+Building a bitstream needs Vivado: **Build Bitstream** only shows up when Vivado is installed. It builds for the
+active platform configuration (with the Xilinx BSCAN JTAG when the on-board USB adapter is selected) and writes
+`<bitstream>.xheep.json` next to the `.bit`:
+
+```json
+{ "board": "pynq-z2", "config": "general.py", "configHash": "<sha1 of the configuration file>", "bscan": false, "xheepCommit": "…", "builtAt": "…" }
+```
+
+In the FPGA modes, the extension uses it to check that apps are generated for the platform the bitstream was
+built for, and offers to switch to that configuration. Ship this file along with a bitstream you hand out to get
+the same check.
+
 ## Software-only projects
 
 Keep your apps in your own repo, with X-HEEP next to them:
@@ -33,8 +91,8 @@ Open an empty folder and run **X-HEEP: New Software Project**. Your apps are bui
 
 ## Settings
 
-All under `xheep.*`: `envSetup`, `riscvToolchain`, `compiler`, `mcuConfig`, `simulator`, `fpgaBoard`,
-`openocdPath`, `openocdConfig`, `serialPort`, `serialBaud`.
+All under `xheep.*`: `envSetup`, `riscvToolchain`, `compiler`, `mcuConfig`, `simulator`, `fpgaBoard`, `bitstream`,
+`fpgaProgrammer`, `openocdPath`, `openocdConfig`, `serialPort`, `serialBaud`.
 
 ## Development
 
