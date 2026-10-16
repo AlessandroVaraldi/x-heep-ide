@@ -1,7 +1,17 @@
 {
-  "name": "x-heep-ide",
-  "displayName": "X-HEEP IDE",
+  "name": "x-heep-ide-alpha",
+  "publisher": "luigigiuffrida98",
+  "displayName": "X-HEEP IDE (Alpha)",
   "description": "Build, simulate, flash and debug X-HEEP applications",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LuigiGiuffrida98/x-heep-ide.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LuigiGiuffrida98/x-heep-ide/issues"
+  },
+  "preview": true,
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.140.0"

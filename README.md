@@ -1,4 +1,4 @@
-# X-HEEP IDE
+# X-HEEP IDE (Alpha)
 
 VS Code extension for developing software on [X-HEEP](https://github.com/esl-epfl/x-heep).
 Clone X-HEEP, open the folder in VS Code, and the extension activates.
