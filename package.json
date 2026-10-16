@@ -1,0 +1,429 @@
+{
+  "name": "x-heep-ide",
+  "displayName": "X-HEEP IDE",
+  "description": "Build, simulate, flash and debug X-HEEP applications",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.140.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:util/xheep_gen/mcu_gen.py",
+    "workspaceContains:x-heep/util/xheep_gen/mcu_gen.py"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.140.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "typescript-eslint": "^8.61.1",
+    "eslint": "^10.5.0",
+    "esbuild": "^0.28.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  },
+  "extensionDependencies": [
+    "ms-vscode.cpptools"
+  ],
+  "icon": "media/icon.png",
+  "contributes": {
+    "commands": [
+      {
+        "command": "xheep.newApp",
+        "title": "New Application",
+        "category": "X-HEEP",
+        "icon": "$(add)"
+      },
+      {
+        "command": "xheep.newFile",
+        "title": "New File in Application",
+        "category": "X-HEEP",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "xheep.newProject",
+        "title": "New Software Project",
+        "category": "X-HEEP",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "xheep.openDocs",
+        "title": "Open Documentation",
+        "category": "X-HEEP",
+        "icon": "$(book)"
+      },
+      {
+        "command": "xheep.selectApp",
+        "title": "Select Application",
+        "category": "X-HEEP",
+        "icon": "$(check)"
+      },
+      {
+        "command": "xheep.selectMode",
+        "title": "Select Run Mode",
+        "category": "X-HEEP",
+        "icon": "$(target)"
+      },
+      {
+        "command": "xheep.build",
+        "title": "Build Application",
+        "category": "X-HEEP",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "xheep.run",
+        "title": "Run Application",
+        "category": "X-HEEP",
+        "icon": "$(play)"
+      },
+      {
+        "command": "xheep.debug",
+        "title": "Debug Application on FPGA (JTAG)",
+        "category": "X-HEEP",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "xheep.openSerial",
+        "title": "Open Serial Monitor",
+        "category": "X-HEEP",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "xheep.selectConfig",
+        "title": "Select Platform Configuration",
+        "category": "X-HEEP",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "xheep.newConfig",
+        "title": "New Platform Configuration",
+        "category": "X-HEEP",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "xheep.mcuGen",
+        "title": "Regenerate Platform (mcu-gen)",
+        "category": "X-HEEP"
+      },
+      {
+        "command": "xheep.buildSimModel",
+        "title": "Rebuild Simulation Model",
+        "category": "X-HEEP",
+        "icon": "$(circuit-board)"
+      },
+      {
+        "command": "xheep.checkEnv",
+        "title": "Check Environment",
+        "category": "X-HEEP",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "xheep.refreshApps",
+        "title": "Refresh Applications",
+        "category": "X-HEEP",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "xheep",
+          "title": "X-HEEP",
+          "icon": "media/xheep.svg"
+        }
+      ]
+    },
+    "views": {
+      "xheep": [
+        {
+          "id": "xheep.apps",
+          "name": "Applications"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "xheep.newApp",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "navigation@0"
+        },
+        {
+          "command": "xheep.refreshApps",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "navigation@1"
+        },
+        {
+          "command": "xheep.newProject",
+          "when": "view == xheep.apps",
+          "group": "1_project@1"
+        },
+        {
+          "command": "xheep.selectConfig",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "3_platform@1"
+        },
+        {
+          "command": "xheep.newConfig",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "3_platform@2"
+        },
+        {
+          "command": "xheep.mcuGen",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "3_platform@3"
+        },
+        {
+          "command": "xheep.buildSimModel",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "3_platform@4"
+        },
+        {
+          "command": "xheep.selectMode",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "2_run@1"
+        },
+        {
+          "command": "xheep.openSerial",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "2_run@2"
+        },
+        {
+          "command": "xheep.checkEnv",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "4_help@1"
+        },
+        {
+          "command": "xheep.openDocs",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "4_help@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "xheep.newFile",
+          "when": "view == xheep.apps && xheep.active && viewItem == userApp",
+          "group": "inline@0"
+        },
+        {
+          "command": "xheep.build",
+          "when": "view == xheep.apps && xheep.active && viewItem =~ /^(app|userApp)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "xheep.run",
+          "when": "view == xheep.apps && xheep.active && viewItem =~ /^(app|userApp)$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "xheep.debug",
+          "when": "view == xheep.apps && xheep.active && viewItem =~ /^(app|userApp)$/",
+          "group": "inline@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "xheep.newApp",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.newFile",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.openDocs",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.selectApp",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.selectMode",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.build",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.run",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.debug",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.openSerial",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.mcuGen",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.buildSimModel",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.checkEnv",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.refreshApps",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.selectConfig",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.newConfig",
+          "when": "xheep.active"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "X-HEEP",
+      "properties": {
+        "xheep.envSetup": {
+          "type": "string",
+          "default": "eval \"$(conda shell.bash hook)\" && conda activate x-heep",
+          "markdownDescription": "Bash snippet run before every `make` call to activate the X-HEEP Python environment. Leave empty to use the repo `.venv`."
+        },
+        "xheep.riscvToolchain": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "RISC-V toolchain install path (`RISCV_XHEEP`). Empty: use `$RISCV_XHEEP` or `~/.riscv`."
+        },
+        "xheep.compiler": {
+          "type": "string",
+          "enum": [
+            "gcc",
+            "clang"
+          ],
+          "default": "gcc",
+          "description": "Compiler used to build applications."
+        },
+        "xheep.mcuConfig": {
+          "type": "string",
+          "default": "configs/general.py",
+          "markdownDescription": "Platform configuration (`.py` or `.hjson`), relative to the project folder or, if not found there, to X-HEEP. The platform is regenerated automatically when it changes."
+        },
+        "xheep.simulator": {
+          "type": "string",
+          "enum": [
+            "verilator",
+            "questasim"
+          ],
+          "default": "verilator",
+          "description": "RTL simulator used by the Simulation mode."
+        },
+        "xheep.fpgaBoard": {
+          "type": "string",
+          "enum": [
+            "pynq-z2",
+            "nexys-a7-100t",
+            "zcu104",
+            "zcu102",
+            "genesys2",
+            "aup-zu3",
+            "vpk180"
+          ],
+          "default": "pynq-z2",
+          "description": "FPGA board the bitstream was built for (make TARGET)."
+        },
+        "xheep.openocdPath": {
+          "type": "string",
+          "default": "openocd",
+          "description": "OpenOCD executable."
+        },
+        "xheep.openocdConfig": {
+          "type": "string",
+          "enum": [
+            "tb/core-v-mini-mcu-pynq-z2-bscan.cfg",
+            "tb/core-v-mini-mcu-esl-programmer.cfg",
+            "tb/core-v-mini-mcu-nexsys-hs2.cfg"
+          ],
+          "default": "tb/core-v-mini-mcu-pynq-z2-bscan.cfg",
+          "description": "OpenOCD configuration (relative to the X-HEEP root) for the JTAG adapter."
+        },
+        "xheep.serialPort": {
+          "type": "string",
+          "default": "",
+          "description": "UART device of the FPGA board. Empty: pick one when needed."
+        },
+        "xheep.serialBaud": {
+          "type": "number",
+          "default": 9600,
+          "description": "UART baud rate."
+        }
+      }
+    },
+    "taskDefinitions": [
+      {
+        "type": "xheep",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "make command run in the X-HEEP root"
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "xheep-gcc",
+        "owner": "xheep",
+        "source": "gcc",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}/sw/build"
+        ],
+        "pattern": {
+          "regexp": "^(.*?):(\\d+):(\\d+):\\s+(?:fatal\\s+)?(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "xheep.apps",
+        "when": "!xheep.active",
+        "contents": "No X-HEEP repository found in this folder.\n[New Software Project](command:xheep.newProject)\nKeeps your apps in this folder and adds X-HEEP in x-heep/.\n[Open X-HEEP Folder](command:vscode.openFolder)"
+      }
+    ]
+  }
+}
