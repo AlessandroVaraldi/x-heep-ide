@@ -10,6 +10,13 @@ export const MODES: Record<Mode, { label: string; detail: string }> = {
 	'fpga-flash': { label: 'FPGA · Flash', detail: 'Program the app into the SPI flash and boot from it' },
 };
 
+/** JTAG adapters for FPGA debugging, each with its OpenOCD config in X-HEEP's tb/. */
+export const JTAG_ADAPTERS = [
+	{ label: 'EPFL Programmer', detail: 'External FT4232 programmer on the PMOD JTAG pins', config: 'tb/core-v-mini-mcu-esl-programmer.cfg' },
+	{ label: 'On-board USB (BSCAN)', detail: 'Pynq-Z2 USB port; needs a bitstream built with FUSESOC_FLAGS=--flag=use_bscane_xilinx', config: 'tb/core-v-mini-mcu-pynq-z2-bscan.cfg' },
+	{ label: 'Digilent HS2', detail: 'Digilent JTAG-HS2 cable (Nexys)', config: 'tb/core-v-mini-mcu-nexsys-hs2.cfg' },
+];
+
 export interface Options {
 	project: string;
 	mode: Mode;

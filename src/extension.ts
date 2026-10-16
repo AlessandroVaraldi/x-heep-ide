@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFile, spawn } from 'child_process';
 import { createHash } from 'crypto';
-import { Mode, MODES, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand,
+import { Mode, MODES, JTAG_ADAPTERS, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand,
 	DEBUG_BUILD_ROOT, debugModelBuildCommand, debugSimCommand, openocdCommand } from './xheep';
 
 let folder: vscode.WorkspaceFolder;
@@ -382,11 +382,19 @@ async function newProject() {
 		: vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(dir)));
 }
 
+const currentAdapter = () => JTAG_ADAPTERS.find(a => a.config === cfg().get<string>('openocdConfig'));
+
 async function selectMode() {
-	const picked = await vscode.window.showQuickPick(
-		(Object.keys(MODES) as Mode[]).map(id => ({ id, label: MODES[id].label, detail: MODES[id].detail, picked: id === currentMode() })),
-		{ placeHolder: 'How should the app run?' });
+	// JTAG debugging is listed once per adapter, since each needs its own OpenOCD config.
+	type Item = vscode.QuickPickItem & { id: Mode; config?: string };
+	const items = (Object.keys(MODES) as Mode[]).flatMap((id): Item[] => id !== 'fpga-jtag'
+		? [{ id, label: MODES[id].label, detail: MODES[id].detail }]
+		: JTAG_ADAPTERS.map(a => ({ id, label: `${MODES[id].label} — ${a.label}`, detail: a.detail, config: a.config })));
+	const picked = await vscode.window.showQuickPick(items, { placeHolder: 'How should the app run?' });
 	if (picked) {
+		if (picked.config) {
+			await cfg().update('openocdConfig', picked.config, vscode.ConfigurationTarget.Workspace);
+		}
 		await state.update('mode', picked.id);
 		refreshUi();
 	}
@@ -565,7 +573,19 @@ async function debug(app?: string) {
 			await openSerial();
 			const ocd = startJob(openocdCommand(openocd, path.join(root, cfg().get<string>('openocdConfig', 'tb/core-v-mini-mcu-pynq-z2-bscan.cfg'))), root);
 			jobs.push(ocd);
-			return waitUntil(() => ocd.log().includes('Listening on port 3333'), 20_000, ocd.done);
+			if (!await waitUntil(() => ocd.log().includes('Listening on port 3333'), 20_000, ocd.done)) {
+				return false;
+			}
+			// OpenOCD opens the GDB port even when it cannot reach the RISC-V debug module.
+			if (/examination failed|dtmcontrol is 0/.test(ocd.log())) {
+				const bscan = cfg().get<string>('openocdConfig', '').includes('bscan');
+				vscode.window.showErrorMessage('X-HEEP: OpenOCD sees the JTAG chain but not the X-HEEP debug module. ' + (bscan
+					? 'The BSCAN config needs a bitstream built with FUSESOC_FLAGS=--flag=use_bscane_xilinx; with an external JTAG adapter, pick it in the run mode.'
+					: 'Check that the bitstream is loaded and the JTAG adapter is wired to X-HEEP.'), 'Show Log').then(pick => pick && output.show());
+				cancelled = true; // error already reported
+				return false;
+			}
+			return true;
 		}
 		const dir = debugSimDir();
 		stopUart = tailUart(path.join(dir, 'uart0.log'), `${o.project} · debug`);
@@ -615,11 +635,18 @@ async function debug(app?: string) {
 		cwd: root,
 		MIMode: 'gdb',
 		miDebuggerPath: gdb,
-		miDebuggerServerAddress: 'localhost:3333',
-		stopAtEntry: true,
-		// As sw/gdbInit: a long timeout for the slow (or simulated) JTAG link, then load the ELF over it.
+		// cppdbg fails on GDB's "riscv:rv32" ('arch' out of range); any 32-bit value skips that detection.
+		targetArchitecture: 'arm',
+		// Exactly sw/gdbInit: cppdbg's own remote launch uses plain `target remote` and its own steps.
+		// Breakpoints set in the editor are inserted after these commands, before the final continue.
 		setupCommands: [{ text: 'set remotetimeout 2000' }],
-		postRemoteConnectCommands: [{ text: 'load' }],
+		// With custom launch commands cppdbg no longer loads the ELF into GDB itself, hence `file`.
+		customLaunchSetupCommands: [
+			{ text: `file '${path.join(root, 'sw', 'build', 'main.elf')}'` },
+			{ text: 'target extended-remote :3333' },
+			{ text: 'load' },
+		],
+		launchCompleteCommand: 'exec-continue',
 	});
 	if (!started) {
 		ended.dispose();
@@ -776,7 +803,7 @@ function refreshUi() {
 	appItem.text = `${status ? icon : '$(chip)'} ${currentApp()}`;
 	appItem.tooltip = `X-HEEP application${status && status !== 'running' ? ` (last build: ${status === 'ok' ? 'succeeded' : 'failed'})` : ''}`;
 	appItem.backgroundColor = status === 'fail' ? new vscode.ThemeColor('statusBarItem.errorBackground') : undefined;
-	modeItem.text = `$(target) ${MODES[currentMode()].label}`;
+	modeItem.text = `$(target) ${MODES[currentMode()].label}${currentMode() === 'fpga-jtag' && currentAdapter() ? ` (${currentAdapter()!.label})` : ''}`;
 	configItem.text = `$(settings) ${path.basename(configPath()).replace(/\.(py|hjson)$/, '')}`;
 }
 
