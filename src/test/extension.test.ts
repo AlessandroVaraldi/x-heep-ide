@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { Options, buildCommand, simCommand, simModelBuildCommand, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand, debugModelBuildCommand, debugSimCommand } from '../xheep';
+import { Options, buildCommand, simCommand, simModelBuildCommand, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand, debugModelBuildCommand, debugSimCommand, cloneCommand } from '../xheep';
 
 const base: Options = { project: 'hello_world', mode: 'sim', compiler: 'gcc', board: 'pynq-z2', simulator: 'verilator' };
 
@@ -19,6 +19,12 @@ suite('X-HEEP make commands', () => {
 		assert.ok(debugModelBuildCommand().includes('--build-root build/debug '));
 		assert.ok(debugModelBuildCommand().includes('--JTAG_DPI=1'));
 		assert.strictEqual(debugSimCommand('/m', '/x/sw/build/main.hex'), "cd '/m' && ./Vtestharness +openOCD=true +firmware='/x/sw/build/main.hex'");
+	});
+
+	test('new projects clone X-HEEP at the pinned commit', () => {
+		const sha = 'bf0748ac5d15a1c274a47e3a7b663e6153c34187';
+		assert.ok(cloneCommand('https://x', sha).includes(`git -C x-heep fetch -q --depth 1 origin ${sha} && git -C x-heep checkout -q ${sha} && git add x-heep;`));
+		assert.ok(!cloneCommand('https://x').includes('checkout'));
 	});
 
 	test('simulation summary reads the testbench output', () => {

@@ -1,5 +1,60 @@
-// Pure helpers that turn the user's choices into X-HEEP make invocations.
-// Kept free of the vscode API so they can be unit tested.
+// Helpers that turn the user's choices into X-HEEP commands and files.
+// Kept free of the vscode API so the unit tests and the end-to-end test (src/test/e2e.ts) share them.
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+export const XHEEP_GIT = 'https://github.com/x-heep/x-heep.git';
+
+/**
+ * The last X-HEEP commit the extension is known to work with. The X-HEEP canary workflow updates this file
+ * in the extension's repo, so new projects get it without waiting for an extension release.
+ */
+export const XHEEP_COMMIT_URL = 'https://raw.githubusercontent.com/LuigiGiuffrida98/x-heep-ide/main/XHEEP_COMMIT';
+export const isCommit = (s: string) => /^[0-9a-f]{40}$/.test(s);
+
+/**
+ * Adds X-HEEP as a shallow submodule in x-heep/, at `commit` if given;
+ * on failure drops the half clone so a retry starts clean.
+ */
+export function cloneCommand(url = XHEEP_GIT, commit?: string): string {
+	const pin = commit ? ` && git -C x-heep fetch -q --depth 1 origin ${commit} && git -C x-heep checkout -q ${commit} && git add x-heep` : '';
+	return `{ [ -d .git ] || git init; } && `
+		+ `{ git submodule add --progress --depth 1 ${url} x-heep && git config -f .gitmodules submodule.x-heep.shallow true${pin}; } `
+		+ `|| { git rm -q --cached x-heep 2>/dev/null; rm -rf x-heep .git/modules/x-heep; exit 1; }`;
+}
+
+/** Creates <dir>/main.c with a hello world for a new app. */
+export function writeMain(dir: string, name: string) {
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, 'main.c'),
+		`#include <stdio.h>\n#include <stdlib.h>\n\nint main(void)\n{\n    printf("Hello from ${name}!\\n");\n    return EXIT_SUCCESS;\n}\n`);
+}
+
+/**
+ * make SOURCE for apps in a software project's sw/ (relative to X-HEEP's sw/).
+ * CMake only takes drivers from <SOURCE>/device, so it also links the project's sw/device to X-HEEP's.
+ */
+export function projectSource(xheep: string, swRoot: string): string {
+	const device = path.join(swRoot, 'device');
+	if (!fs.existsSync(device)) {
+		fs.symlinkSync(path.relative(swRoot, path.join(xheep, 'sw', 'device')), device);
+	}
+	// realpath: the Makefile resolves its own location, so x-heep/ may be a symlink.
+	return path.relative(fs.realpathSync(path.join(xheep, 'sw')), fs.realpathSync(swRoot));
+}
+
+/** A new platform configuration: X-HEEP's configs/general.py with Pylance-friendly imports. */
+export function configTemplate(xheep: string, name: string): string {
+	const findModule = (pkg: string, cls: string) => {
+		const dir = path.join(xheep, 'util', 'xheep_gen', ...pkg.split('.'));
+		const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.py') && f !== '__init__.py') : [];
+		return files.find(f => new RegExp(`^class ${cls}\\b`, 'm').test(fs.readFileSync(path.join(dir, f), 'utf8')))?.replace(/\.py$/, '');
+	};
+	return `# Platform configuration "${name}", started from X-HEEP configs/general.py.\n`
+		+ '# Edit and save: the extension regenerates the platform before the next build.\n'
+		+ explicitImports(fs.readFileSync(path.join(xheep, 'configs', 'general.py'), 'utf8'), findModule);
+}
 
 export type Mode = 'sim' | 'fpga-jtag' | 'fpga-flash';
 export type Simulator = 'verilator' | 'questasim';

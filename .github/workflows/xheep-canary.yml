@@ -1,0 +1,107 @@
+# Tests the extension against every new X-HEEP main commit. When it passes, the commit is pinned in
+# XHEEP_COMMIT, which the extension reads to clone X-HEEP for new projects, and a minor release is made;
+# when it fails, the pin stays on the last working commit and an issue is opened (GitHub notifies the assignee).
+name: X-HEEP canary
+
+on:
+  schedule:
+    - cron: '0 23 * * *' # daily, midnight in Italy (CET; 1:00 in summer time); GitHub cron is UTC
+  workflow_dispatch:
+  repository_dispatch:
+    types: [xheep-push] # sent by X-HEEP on push to main, see README
+
+concurrency: xheep-canary
+
+permissions:
+  contents: write # push the new pin and the release tag
+  issues: write # report breakages
+  actions: write # start the release workflow
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      run: ${{ steps.sha.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git ls-remote https://github.com/x-heep/x-heep.git refs/heads/main | cut -f1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          # Skip a commit already pinned, or already reported as breaking in an open issue.
+          reported=$(gh issue list --label xheep-canary --state open --search "$sha in:body" --json number --jq length 2>/dev/null || echo 0)
+          if [ "$sha" = "$(cat XHEEP_COMMIT)" ] || [ "$reported" != 0 ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e:
+    needs: check
+    if: needs.check.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/x-heep/x-heep/x-heep-toolchain:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The login shell below resets PATH (Debian's /etc/profile), so remember where node is.
+      - run: npm ci && npm run compile-tests && echo "NODE=$(command -v node)" >> "$GITHUB_ENV"
+      - name: Software project end to end
+        shell: bash -le {0}
+        env:
+          XHEEP_COMMIT: ${{ needs.check.outputs.sha }}
+        run: '"$NODE" out/test/e2e.js "$RUNNER_TEMP/project"'
+
+  pin:
+    needs: [check, e2e]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ needs.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          echo "$SHA" > XHEEP_COMMIT
+          version=$(npx --yes semver -i minor "$(node -p "require('./package.json').version")")
+          # New changelog entry right under the title.
+          VERSION=$version node -e "const fs = require('fs'), e = process.env;
+            const lines = fs.readFileSync('CHANGELOG.md', 'utf8').split('\\n');
+            lines.splice(1, 0, '', '## ' + e.VERSION, '', '- Tested with X-HEEP [' + e.SHA.slice(0, 7) + '](https://github.com/x-heep/x-heep/commit/' + e.SHA + ').');
+            fs.writeFileSync('CHANGELOG.md', lines.join('\\n'));"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am "Pin X-HEEP ${SHA:0:7}"
+          npm version minor -m "Release %s (X-HEEP ${SHA:0:7})"
+          git pull --rebase && git push --follow-tags
+          # A tag pushed with GITHUB_TOKEN starts no workflow, workflow_dispatch is the exception.
+          gh workflow run ci.yml --ref "v$version"
+          for n in $(gh issue list --label xheep-canary --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Works again with x-heep/x-heep@$SHA, now pinned."
+          done
+
+  report:
+    needs: [check, e2e]
+    if: failure()
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ needs.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          gh label create xheep-canary --color B60205 --description 'Extension broken by a new X-HEEP commit' --force
+          gh issue create --label xheep-canary --assignee "${{ github.repository_owner }}" \
+            --title "Extension broken by X-HEEP ${SHA:0:7}" \
+            --body "The end-to-end check fails with x-heep/x-heep@$SHA: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          New projects keep using the pinned commit \`$(cat XHEEP_COMMIT)\` until the extension works with the new X-HEEP."

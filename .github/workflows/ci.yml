@@ -5,6 +5,7 @@ on:
     branches: [master, main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch: # the X-HEEP canary starts it on the release tags it creates
 
 jobs:
   test:
@@ -19,8 +20,27 @@ jobs:
       # The tests run inside a VS Code instance, which needs a display.
       - run: xvfb-run -a npm test
 
+  # The extension's steps for a software project, run against the latest X-HEEP
+  # in the image X-HEEP's own CI uses: clone, mcu-gen, build, Verilator model, simulation.
+  e2e:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/x-heep/x-heep/x-heep-toolchain:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The login shell below resets PATH (Debian's /etc/profile), so remember where node is.
+      - run: npm ci && npm run compile-tests && echo "NODE=$(command -v node)" >> "$GITHUB_ENV"
+      # Against the pinned X-HEEP commit, the one new projects get (latest main if none is pinned yet).
+      - name: Software project end to end
+        shell: bash -le {0} # login shell: the image activates conda and its tools in /etc/profile.d
+        run: 'XHEEP_COMMIT=$(cat XHEEP_COMMIT) "$NODE" out/test/e2e.js "$RUNNER_TEMP/project"'
+
   publish:
-    needs: test
+    needs: [test, e2e]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

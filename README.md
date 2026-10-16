@@ -45,3 +45,35 @@ npm test
 ```
 
 Press F5 to open an Extension Development Host, then open the X-HEEP folder in it.
+
+`make e2e` runs the extension's software-project steps against a fresh X-HEEP clone (clone, mcu-gen,
+build, Verilator model, simulation); it needs the X-HEEP tools. CI runs it in the x-heep-toolchain image.
+
+## Releasing
+
+`make patch` (or `minor`, `major`) bumps the version, tags `v<version>` and pushes: CI then runs the tests
+and the end-to-end check, publishes to the Marketplace and creates the GitHub release with the `.vsix`.
+Add the new version to `CHANGELOG.md` first.
+
+## X-HEEP compatibility
+
+`XHEEP_COMMIT` holds the last X-HEEP commit the extension is known to work with; new software projects
+clone X-HEEP at that commit (read live from this repo, falling back to the copy in the package).
+The `X-HEEP canary` workflow runs the end-to-end check on each new X-HEEP `main` commit: if it passes it
+updates the pin, otherwise it keeps the old one and opens an issue labelled `xheep-canary`.
+
+It checks X-HEEP every night at midnight (Italian time) and makes a minor release with each new pin. To test right after each X-HEEP push, add this job to X-HEEP's CI, with a
+`X_HEEP_IDE_DISPATCH` secret holding a token that can write to this repository's contents:
+
+```yaml
+on:
+  push:
+    branches: [main]
+jobs:
+  notify-ide:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api repos/LuigiGiuffrida98/x-heep-ide/dispatches -f event_type=xheep-push
+        env:
+          GH_TOKEN: ${{ secrets.X_HEEP_IDE_DISPATCH }}
+```

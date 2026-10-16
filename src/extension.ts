@@ -4,9 +4,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFile, spawn } from 'child_process';
 import { createHash } from 'crypto';
-import { Mode, MODES, JTAG_ADAPTERS, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand,
-	DEBUG_BUILD_ROOT, debugModelBuildCommand, debugSimCommand, openocdCommand } from './xheep';
+import { Mode, MODES, JTAG_ADAPTERS, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, simSummary, incrementalBuildCommand, verilatorRunCommand,
+	DEBUG_BUILD_ROOT, debugModelBuildCommand, debugSimCommand, openocdCommand,
+	XHEEP_GIT, XHEEP_COMMIT_URL, isCommit, cloneCommand, writeMain, projectSource, configTemplate } from './xheep';
 
+let extensionDir: string;
 let folder: vscode.WorkspaceFolder;
 /** The X-HEEP repo: the workspace itself, or `x-heep/` inside a software project. */
 let root: string;
@@ -49,16 +51,6 @@ function exampleApps(): string[] {
 const isProjectApp = (app: string) => isProject() && fs.existsSync(path.join(userAppsDir(), app));
 const appDir = (app: string) => path.join(isProjectApp(app) ? userAppsDir() : examplesDir(), app);
 
-function projectSource(): string {
-	// CMake only takes drivers from <SOURCE>/device, so the project's sw/ needs a link to X-HEEP's.
-	const device = path.join(swRoot, 'device');
-	if (!fs.existsSync(device)) {
-		fs.symlinkSync(path.relative(swRoot, path.join(root, 'sw', 'device')), device);
-	}
-	// realpath: the Makefile resolves its own location, so x-heep/ may be a symlink.
-	return path.relative(fs.realpathSync(path.join(root, 'sw')), fs.realpathSync(swRoot));
-}
-
 // shortcut: an app counts as an example while git tracks it, so a committed user app moves to Examples.
 let examples = new Set<string>();
 
@@ -94,7 +86,7 @@ function options(project = currentApp(), mode = currentMode()): Options {
 		compiler: cfg().get<string>('compiler', 'gcc'),
 		board: cfg().get<string>('fpgaBoard', 'pynq-z2'),
 		simulator,
-		source: isProjectApp(project) ? projectSource() : undefined,
+		source: isProjectApp(project) ? projectSource(root, swRoot) : undefined,
 	};
 }
 
@@ -182,13 +174,6 @@ async function selectConfig() {
 	await cfg().update('mcuConfig', path.relative(projectDir(), picked.file), vscode.ConfigurationTarget.Workspace);
 }
 
-/** The module (file stem) of an X-HEEP peripheral package that defines class `name`. */
-function findPeripheralModule(pkg: string, name: string): string | undefined {
-	const dir = path.join(root, 'util', 'xheep_gen', ...pkg.split('.'));
-	const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.py') && f !== '__init__.py') : [];
-	return files.find(f => new RegExp(`^class ${name}\\b`, 'm').test(fs.readFileSync(path.join(dir, f), 'utf8')))?.replace(/\.py$/, '');
-}
-
 async function newConfig() {
 	const name = await vscode.window.showInputBox({
 		prompt: 'Name of the new platform configuration',
@@ -201,9 +186,7 @@ async function newConfig() {
 	}
 	const file = path.join(userConfigsDir(), `${name}.py`);
 	fs.mkdirSync(userConfigsDir(), { recursive: true });
-	fs.writeFileSync(file, `# Platform configuration "${name}", started from X-HEEP configs/general.py.\n`
-		+ '# Edit and save: the extension regenerates the platform before the next build.\n'
-		+ explicitImports(fs.readFileSync(path.join(root, 'configs', 'general.py'), 'utf8'), findPeripheralModule));
+	fs.writeFileSync(file, configTemplate(root, name));
 	await cfg().update('mcuConfig', path.relative(projectDir(), file), vscode.ConfigurationTarget.Workspace);
 	await vscode.window.showTextDocument(vscode.Uri.file(file));
 }
@@ -261,12 +244,6 @@ async function selectApp(app?: string) {
 	}
 }
 
-function writeMain(dir: string, name: string) {
-	fs.mkdirSync(dir, { recursive: true });
-	fs.writeFileSync(path.join(dir, 'main.c'),
-		`#include <stdio.h>\n#include <stdlib.h>\n\nint main(void)\n{\n    printf("Hello from ${name}!\\n");\n    return EXIT_SUCCESS;\n}\n`);
-}
-
 async function newApp() {
 	const name = await vscode.window.showInputBox({
 		prompt: 'Name of the new application',
@@ -300,7 +277,6 @@ async function newFile(app = currentApp()) {
 	await vscode.window.showTextDocument(vscode.Uri.file(file));
 }
 
-const XHEEP_GIT = 'https://github.com/x-heep/x-heep.git';
 
 function addToGitignore(dir: string, entry: string) {
 	const file = path.join(dir, '.gitignore');
@@ -320,6 +296,22 @@ function runLogged(title: string, script: string, cwd: string): Thenable<number 
 		proc.stderr.on('data', d => output.append(d.toString()));
 		proc.on('close', resolve);
 	}));
+}
+
+/** The last X-HEEP commit the extension is known to work with: the live pin on GitHub, else the bundled one. */
+async function pinnedCommit(): Promise<string | undefined> {
+	try {
+		const live = (await (await fetch(XHEEP_COMMIT_URL, { signal: AbortSignal.timeout(5000) })).text()).trim();
+		if (isCommit(live)) {
+			return live;
+		}
+	} catch { /* offline: fall back to the pin shipped with the extension */ }
+	try {
+		const bundled = fs.readFileSync(path.join(extensionDir, 'XHEEP_COMMIT'), 'utf8').trim();
+		return isCommit(bundled) ? bundled : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Sets up a software project in a chosen folder: own apps in sw/applications, X-HEEP in x-heep/. */
@@ -343,7 +335,7 @@ async function newProject() {
 	}
 	if (!fs.existsSync(xheep)) {
 		const how = await vscode.window.showQuickPick([
-			{ id: 'submodule', label: 'Add X-HEEP as a git submodule', detail: `Clones ${XHEEP_GIT} into x-heep/ and pins its version in your repo` },
+			{ id: 'submodule', label: 'Add X-HEEP as a git submodule', detail: `Clones ${XHEEP_GIT} into x-heep/ at the latest commit this extension is tested with` },
 			{ id: 'link', label: 'Link an existing X-HEEP clone', detail: 'Symlinks x-heep/ to a clone you already have (kept out of git)' },
 		], { placeHolder: 'Where does X-HEEP come from?' });
 		if (!how) {
@@ -361,10 +353,9 @@ async function newProject() {
 			fs.symlinkSync(src, xheep);
 			addToGitignore(dir, 'x-heep');
 		} else {
-			// Shallow (also for later clones of the project via .gitmodules); on failure drop the half clone so a retry starts clean.
-			const code = await runLogged('Cloning X-HEEP…', `{ [ -d .git ] || git init; } && `
-				+ `{ git submodule add --progress --depth 1 ${XHEEP_GIT} x-heep && git config -f .gitmodules submodule.x-heep.shallow true; } `
-				+ `|| { git rm -q --cached x-heep 2>/dev/null; rm -rf x-heep .git/modules/x-heep; exit 1; }`, dir);
+			const commit = await pinnedCommit();
+			output.appendLine(commit ? `X-HEEP commit known to work with this extension: ${commit}` : 'No pinned X-HEEP commit found: using the latest main.');
+			const code = await runLogged('Cloning X-HEEP…', cloneCommand(XHEEP_GIT, commit), dir);
 			if (code !== 0) {
 				vscode.window.showErrorMessage('Cloning X-HEEP failed, see the X-HEEP output. Nothing was left behind: you can retry.');
 				return;
@@ -826,6 +817,7 @@ function setupIntelliSense() {
 const isXheep = (dir: string) => fs.existsSync(path.join(dir, 'util', 'xheep_gen', 'mcu_gen.py'));
 
 export function activate(context: vscode.ExtensionContext) {
+	extensionDir = context.extensionPath;
 	output = vscode.window.createOutputChannel('X-HEEP');
 	uart = vscode.window.createOutputChannel('X-HEEP UART');
 	context.subscriptions.push(output, uart, vscode.commands.registerCommand('xheep.newProject', newProject));
