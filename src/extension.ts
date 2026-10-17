@@ -7,7 +7,7 @@ import { execFile, spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { Mode, MODES, JTAG_ADAPTERS, Adapter, boardAdapters, pickAdapter, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, simSummary, incrementalBuildCommand, verilatorRunCommand,
 	DEBUG_BUILD_ROOT, debugModelBuildCommand, debugSimCommand, openocdCommand,
-	XHEEP_GIT, XHEEP_COMMIT_URL, isCommit, cloneCommand, writeMain, projectSource, configTemplate,
+	XHEEP_GIT, XHEEP_COMMIT_URL, isCommit, cloneCommand, changedFiles, isGenerated, updateCommand, writeMain, projectSource, configTemplate,
 	Programmer, BOARDS, BitstreamInfo, fileSha1, builtBitstream, bitstreamBuildCommand, vivadoTcl, vivadoCommand, openocdFpgaCommand,
 	EXIT_BREAKPOINT, gdbRunCommand, exitCode, regValue, pickSerialPort, serialReadCommand,
 	linkerScript, memoryRegions, stackSize, explainBuild, stackProblems, uartException, exceptionCause, printable,
@@ -661,6 +661,51 @@ async function pinnedCommit(): Promise<string | undefined> {
 	} catch {
 		return undefined;
 	}
+}
+
+/** X-HEEP is the submodule the extension added to a software project (not the user's own clone, opened or linked). */
+const managedXheep = () => isProject() && !fs.lstatSync(root).isSymbolicLink()
+	&& /path\s*=\s*x-heep\s*$/m.test(readText(path.join(projectDir(), '.gitmodules')));
+
+const short = (sha?: string) => sha?.slice(0, 7) ?? '?';
+
+/**
+ * Moves the project's X-HEEP submodule to the latest commit tested with the extension, or to main. Refuses local
+ * changes other than generated files (mcu-gen rewrites those in place), then makes the next build regenerate the
+ * platform and the simulation model, which belong to the previous X-HEEP.
+ */
+async function updateXheep() {
+	const head = await gitHead();
+	const pin = await pinnedCommit();
+	if (!managedXheep()) {
+		vscode.window.showInformationMessage(`X-HEEP here is your own clone (${root}): update it with git. It is at ${short(head)}`
+			+ (pin ? `; the extension is tested with ${short(pin)}.` : '.'));
+		return;
+	}
+	const changed = changedFiles((await shOut('git status --porcelain --untracked-files=no', true)).out);
+	const own = changed.filter(f => !isGenerated(root, f));
+	if (own.length) {
+		vscode.window.showErrorMessage(`X-HEEP has local changes: ${own.slice(0, 5).join(', ')}${own.length > 5 ? ', …' : ''}. Commit or discard them in x-heep/ first.`);
+		return;
+	}
+	const picked = await vscode.window.showQuickPick([
+		...(pin ? [{ label: `Latest tested commit (${short(pin)})`, description: pin === head ? 'current' : 'recommended', detail: 'The newest X-HEEP the extension is known to work with', ref: pin }] : []),
+		{ label: 'main', description: 'untested', detail: 'The newest X-HEEP: it may not work with this version of the extension yet', ref: 'main' },
+	], { placeHolder: `Update X-HEEP (now at ${short(head)})` });
+	if (!picked || !await runQuiet('Updating X-HEEP', makeTask('Update X-HEEP', updateCommand(picked.ref, changed), true), true)) {
+		return;
+	}
+	// The generated platform, the models and the CMake tree come from the previous X-HEEP.
+	for (const key of ['platformStamp', 'modelStamp.verilator', 'modelStamp.questasim', 'modelStamp.debug', 'lastBuildKey']) {
+		await state.update(key, undefined);
+	}
+	await state.update('xheepOnMain', picked.ref === 'main');
+	apps.refresh();
+	refreshUi();
+	const bitstream = bitstreamFile();
+	vscode.window.showInformationMessage(`X-HEEP is now at ${short(await gitHead())}. The next build regenerates the platform and the simulation model.`
+		+ ' Commit x-heep in your project to keep this version.'
+		+ (bitstream?.startsWith(root + path.sep) ? ' Rebuild the FPGA bitstream too if your app needs the new hardware.' : ''));
 }
 
 /** Sets up a software project in a chosen folder: own apps in sw/applications, X-HEEP in x-heep/. */
@@ -1512,10 +1557,11 @@ async function checkHdlTools(report: Report, note: (text: string) => void, addFi
 }
 
 /**
- * What the FPGA modes need from the hardware: the JTAG adapter, the flash programmer and the board's USB connected
- * and usable (udev), the UART, and iceprog buildable for the flash.
+ * What the FPGA modes need from the hardware: the JTAG adapter, the flash programmer and the board's USB usable
+ * (udev), the UART (dialout), iceprog buildable for the flash. Hardware that is not plugged in is a note, not a
+ * problem: working in simulation only is the norm, and a run on the board says itself what is missing.
  */
-async function checkHardware(report: Report) {
+async function checkHardware(report: Report, note: (text: string) => void) {
 	const mode = currentMode();
 	const needed = new Map<string, string>(); // USB id -> what for
 	if (mode === 'fpga-jtag') {
@@ -1525,7 +1571,7 @@ async function checkHardware(report: Report) {
 		} else if (!adapter) {
 			const bitstream = bitstreamFile();
 			const fit = boardAdapters(fpgaBoard(), bitstream ? bitstreamInfo(bitstream)?.bscan : undefined).filter(a => !a.bscan);
-			report('fail', 'JTAG adapter: none connected', `connect ${fit.map(a => a.label).join(' or ')} to X-HEEP's PMOD JTAG pins`);
+			note(`JTAG adapter: none connected (for the FPGA: ${fit.map(a => a.label).join(' or ')} on X-HEEP's PMOD JTAG pins)`);
 		}
 	}
 	if (mode === 'fpga-flash') {
@@ -1540,7 +1586,7 @@ async function checkHardware(report: Report) {
 		const [vid, pid] = id.split(':');
 		const dev = devices.find(d => d.vid === vid && d.pid === pid);
 		if (!dev) {
-			report('fail', `${what}: not connected`, `no USB device ${id}: plug it in${what.includes('USB') ? ' and power the board' : ''}`);
+			note(`${what}: not connected (USB ${id})`);
 		} else if (!canUse(dev.node)) {
 			report('fail', `${what}: no permission on ${dev.node}`, `allow users to open it: echo '${udevRule(vid, pid)}' | sudo tee /etc/udev/rules.d/60-xheep.rules`
 				+ ' && sudo udevadm control --reload && sudo udevadm trigger, then plug it in again');
@@ -1551,7 +1597,7 @@ async function checkHardware(report: Report) {
 	const set = cfg().get<string>('serialPort', '');
 	const port = set && fs.existsSync(set) ? set : pickSerialPort(serialCandidates());
 	if (!port) {
-		report('warn', 'UART: no serial port found', 'the program\'s output will not show: connect the UART (the EPFL programmer has it) or set "xheep.serialPort"');
+		note('UART: no serial port found (the EPFL programmer has it, or set "xheep.serialPort")');
 	} else if (!canUse(port)) {
 		report('fail', `UART: no permission on ${port}`, 'join the dialout group: sudo usermod -aG dialout $USER, then log out and in');
 	} else {
@@ -1585,6 +1631,15 @@ async function checkEnv(quiet = false) {
 		addFix('Set Toolchain Path', () => vscode.commands.executeCommand('workbench.action.openSettings', 'xheep.riscvToolchain'));
 	}
 
+	if (managedXheep()) {
+		const [head, pin] = await Promise.all([gitHead(), pinnedCommit()]);
+		if (pin && head !== pin && !state.get('xheepOnMain')) {
+			report('warn', `X-HEEP is at ${short(head)}, not at the commit tested with the extension (${short(pin)})`, 'run Update X-HEEP');
+			addFix('Update X-HEEP', updateXheep);
+		} else {
+			note(`X-HEEP: ${short(head)}${head === pin ? ' (tested with the extension)' : state.get('xheepOnMain') ? ' (main, untested)' : ''}`);
+		}
+	}
 	note(`Platform config: ${configPath()} (${platformReady() ? 'generated' : 'regenerated on the next build'})`);
 
 	if (envOk) {
@@ -1621,7 +1676,7 @@ async function checkEnv(quiet = false) {
 		note(`Bitstream: ${bitstream ? `${bitstream}${built ? ` (built for ${path.basename(built)})` : ''}`
 			: `none for ${fpgaBoard()}: set "xheep.bitstream"${hasVivado ? ' or run Build Bitstream' : ''}`}`);
 		if (fpga) {
-			await checkHardware(report);
+			await checkHardware(report, note);
 		}
 	}
 
@@ -1777,6 +1832,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('xheep.selectMode', selectMode),
 		vscode.commands.registerCommand('xheep.newApp', newApp),
 		vscode.commands.registerCommand('xheep.newFile', newFile),
+		vscode.commands.registerCommand('xheep.updateXheep', updateXheep),
 		vscode.commands.registerCommand('xheep.openDocs', () => vscode.env.openExternal(vscode.Uri.parse('https://x-heep.readthedocs.io/en/latest/'))),
 		vscode.commands.registerCommand('xheep.build', build),
 		vscode.commands.registerCommand('xheep.run', run),

@@ -25,6 +25,23 @@ export function cloneCommand(url = XHEEP_GIT, commit?: string): string {
 		+ `|| { git rm -q --cached x-heep 2>/dev/null; rm -rf x-heep .git/modules/x-heep; exit 1; }`;
 }
 
+/** Paths changed in a work tree, from `git status --porcelain --untracked-files=no` (a rename gives its new path). */
+export function changedFiles(porcelain: string): string[] {
+	return porcelain.split('\n').filter(l => l.length > 3).map(l => l.slice(3).split(' -> ').pop()!);
+}
+
+/** Files mcu-gen writes from a template next to them (`<file>.tpl`): regenerated anyway, so safe to discard. */
+export const isGenerated = (xheep: string, file: string) => fs.existsSync(path.join(xheep, `${file}.tpl`));
+
+/**
+ * Moves an X-HEEP checkout (run inside it) to `ref`, a commit or a branch of origin, fetched shallow like the
+ * submodule; `discard` are generated files to restore first, so the checkout does not refuse them.
+ */
+export function updateCommand(ref: string, discard: string[] = []): string {
+	const restore = discard.length ? `git checkout -q -- ${discard.map(f => `'${f}'`).join(' ')} && ` : '';
+	return `${restore}git fetch -q --depth 1 origin ${ref} && git checkout -q FETCH_HEAD`;
+}
+
 /** Creates <dir>/main.c with a hello world for a new app. */
 export function writeMain(dir: string, name: string) {
 	fs.mkdirSync(dir, { recursive: true });

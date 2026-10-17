@@ -81,6 +81,12 @@
         "icon": "$(new-folder)"
       },
       {
+        "command": "xheep.updateXheep",
+        "title": "Update X-HEEP",
+        "category": "X-HEEP",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "xheep.openDocs",
         "title": "Open Documentation",
         "category": "X-HEEP",
@@ -251,6 +257,11 @@
           "group": "4_help@1"
         },
         {
+          "command": "xheep.updateXheep",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "4_help@1.5"
+        },
+        {
           "command": "xheep.openDocs",
           "when": "view == xheep.apps && xheep.active",
           "group": "4_help@2"
@@ -349,6 +360,10 @@
         },
         {
           "command": "xheep.editPlatform",
+          "when": "xheep.active"
+        },
+        {
+          "command": "xheep.updateXheep",
           "when": "xheep.active"
         }
       ]

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
-import { Options, buildCommand, simCommand, simModelBuildCommand, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand, debugModelBuildCommand, debugSimCommand, cloneCommand,
+import { changedFiles, isGenerated, updateCommand, Options, buildCommand, simCommand, simModelBuildCommand, mcuGenCommand, explicitImports, simSummary, incrementalBuildCommand, verilatorRunCommand, debugModelBuildCommand, debugSimCommand, cloneCommand,
 	builtBitstream, bitstreamBuildCommand, vivadoTcl, openocdFpgaCommand, fileSha1,
 	gdbRunCommand, exitCode, regValue, pickSerialPort, serialReadCommand,
 	memoryRegions, stackSize, explainBuild, stackProblems, uartException, exceptionCause, printable,
@@ -271,5 +271,21 @@ suite('JTAG adapter', () => {
 		assert.deepStrictEqual(labels(pickAdapter(pynq, plugged()).choices), ['EPFL Programmer', 'On-board USB (BSCAN)', 'Digilent JTAG-HS2']);
 		// A BSCAN bitstream leaves a single candidate: used even if not seen, OpenOCD then tells.
 		assert.strictEqual(pickAdapter(boardAdapters('pynq-z2', true), plugged()).adapter?.label, 'On-board USB (BSCAN)');
+	});
+});
+
+suite('Updating X-HEEP', () => {
+	test('lists the changed files, generated ones apart', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xheep-'));
+		fs.mkdirSync(path.join(dir, 'hw'));
+		fs.writeFileSync(path.join(dir, 'hw', 'top.sv.tpl'), '');
+		const files = changedFiles(' M hw/top.sv\nM  configs/general.py\nR  a.c -> b.c\n');
+		assert.deepStrictEqual(files, ['hw/top.sv', 'configs/general.py', 'b.c']);
+		assert.deepStrictEqual(files.filter(f => isGenerated(dir, f)), ['hw/top.sv']);
+	});
+
+	test('restores generated files, then fetches the ref shallow', () => {
+		assert.strictEqual(updateCommand('main'), 'git fetch -q --depth 1 origin main && git checkout -q FETCH_HEAD');
+		assert.strictEqual(updateCommand('abc', ['hw/top.sv']), "git checkout -q -- 'hw/top.sv' && git fetch -q --depth 1 origin abc && git checkout -q FETCH_HEAD");
 	});
 });

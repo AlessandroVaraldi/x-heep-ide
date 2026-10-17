@@ -36,6 +36,7 @@ configuration does not match the hardware of the bitstream.
 
 Run **X-HEEP: New Software Project** in an empty folder to keep your apps in your own repo, with X-HEEP added
 as a git submodule (or a link to an existing clone) in `x-heep/`.
+**Update X-HEEP** moves that submodule to the latest X-HEEP commit tested with the extension, or to `main`.
 
 ## Settings
 
