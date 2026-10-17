@@ -25,12 +25,14 @@ export interface Catalog {
 	userPeripherals: { name: string; cls: string; doc: string }[];
 }
 
-/** The editor's form. Memory is only editable when it is plain 32 KB banks and at most one interleaved group. */
+/** The editor's form. Memory is only editable when the contiguous banks share one size and there is at most one interleaved group. */
 export interface PlatformForm {
 	cpu: string;
 	fpu: boolean;
 	bus: string;
 	banks: number;
+	/** Size of each contiguous bank: a power of two, as xheep_gen requires. */
+	bankKb: number;
 	codeKb: number;
 	ilNum: number;
 	ilSizeKb: number;
@@ -39,12 +41,13 @@ export interface PlatformForm {
 	peripherals: string[];
 }
 
-export const BANK_KB = 32;
+/** Bank sizes the form offers, contiguous and interleaved (xheep_gen takes any power of two from 1 KB). */
+export const BANK_SIZES_KB = [8, 16, 32, 64];
 export const FPU_CPUS = ['cv32e40p', 'cv32e40px'];
 
 /** Whether the editor can represent the configuration's memory (else it shows it, and Python keeps it). */
 export function plainMemory(p: Platform): boolean {
-	return p.banks.every(b => b === BANK_KB) && p.interleaved.length <= 1;
+	return p.banks.every(b => b === p.banks[0] && BANK_SIZES_KB.indexOf(b) >= 0) && p.interleaved.length <= 1;
 }
 
 export function formFromPlatform(p: Platform): PlatformForm {
@@ -52,6 +55,7 @@ export function formFromPlatform(p: Platform): PlatformForm {
 	return {
 		cpu: p.cpu, fpu: p.fpu, bus: p.bus,
 		banks: p.banks.length,
+		bankKb: p.banks[0] ?? 32,
 		codeKb: code?.end ? (code.end - code.start) / 1024 : 0,
 		ilNum: p.interleaved[0]?.num ?? 0,
 		ilSizeKb: p.interleaved[0]?.sizeKb ?? 16,
@@ -74,7 +78,7 @@ export const archFor = (p: Pick<Platform, 'fpu'>) => p.fpu ? 'rv32imfc_zicsr' : 
 
 /** Form fields that change the hardware (needing a new simulation model and bitstream), not just the linker script. */
 export function hardwareChanges(base: PlatformForm, form: PlatformForm): string[] {
-	return (['cpu', 'fpu', 'bus', 'banks', 'ilNum', 'ilSizeKb', 'peripherals'] as const)
+	return (['cpu', 'fpu', 'bus', 'banks', 'bankKb', 'ilNum', 'ilSizeKb', 'peripherals'] as const)
 		.filter(k => JSON.stringify(base[k]) !== JSON.stringify(form[k]));
 }
 
@@ -89,7 +93,7 @@ export function formProblems(f: PlatformForm, memoryEditable: boolean): string[]
 		problems.push(`${f.cpu} has no FPU.`);
 	}
 	if (memoryEditable) {
-		const total = f.banks * BANK_KB;
+		const total = f.banks * f.bankKb;
 		if (f.codeKb + f.stackKb + f.heapKb >= total) {
 			problems.push(`Code, stack and heap (${f.codeKb + f.stackKb + f.heapKb} KB) do not fit in ${total} KB of RAM: add banks or shrink them.`);
 		}
@@ -133,10 +137,10 @@ export function overlayConfig(name: string, baseRel: string, base: PlatformForm,
 		imports.add('from bus_type import BusType');
 		body.push(`    system.set_bus_type(BusType.${form.bus})`);
 	}
-	if (memoryEditable && ['banks', 'codeKb', 'ilNum', 'ilSizeKb'].some(k => changed.has(k as keyof PlatformForm))) {
+	if (memoryEditable && ['banks', 'bankKb', 'codeKb', 'ilNum', 'ilSizeKb'].some(k => changed.has(k as keyof PlatformForm))) {
 		imports.add('from memory_ss.memory_ss import MemorySS').add('from memory_ss.linker_section import LinkerSection');
 		const code = hex(form.codeKb * 1024);
-		body.push('    memory_ss = MemorySS()', `    memory_ss.add_ram_banks([${BANK_KB}] * ${form.banks})`);
+		body.push('    memory_ss = MemorySS()', `    memory_ss.add_ram_banks([${form.bankKb}] * ${form.banks})`);
 		if (form.ilNum) {
 			body.push(`    memory_ss.add_ram_banks_il(${form.ilNum}, ${form.ilSizeKb}, "interleaved_group_0")`);
 		}

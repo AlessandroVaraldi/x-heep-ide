@@ -13,11 +13,13 @@ const catalog: Catalog = { cpus: ['cv32e20', 'cv32e40p'], userPeripherals: [{ na
 suite('Platform editor', () => {
 	test('reads a configuration into the form', () => {
 		assert.deepStrictEqual(formFromPlatform(general), {
-			cpu: 'cv32e20', fpu: false, bus: 'onetoM', banks: 2, codeKb: 58, ilNum: 0, ilSizeKb: 16, stackKb: 2, heapKb: 2,
+			cpu: 'cv32e20', fpu: false, bus: 'onetoM', banks: 2, bankKb: 32, codeKb: 58, ilNum: 0, ilSizeKb: 16, stackKb: 2, heapKb: 2,
 			peripherals: ['gpio', 'i2c', 'i2s', 'rv_plic', 'rv_timer', 'spi2', 'spi_host', 'uart'],
 		});
 		assert.ok(plainMemory(general));
-		assert.ok(!plainMemory(customMemory)); // shown, but left to its file
+		assert.ok(!plainMemory(customMemory)); // mixed sizes, two interleaved groups: shown, but left to their file
+		assert.ok(plainMemory({ ...general, banks: [16, 16, 16] }));
+		assert.strictEqual(formFromPlatform({ ...general, banks: [16, 16, 16] }).bankKb, 16);
 	});
 
 	test('a bitstream stays good across stack, heap and the code/data split', () => {
@@ -28,6 +30,7 @@ suite('Platform editor', () => {
 		const base = formFromPlatform(general);
 		assert.deepStrictEqual(hardwareChanges(base, { ...base, stackKb: 16, codeKb: 96 }), []);
 		assert.deepStrictEqual(hardwareChanges(base, { ...base, banks: 6, ilNum: 4 }), ['banks', 'ilNum']);
+		assert.deepStrictEqual(hardwareChanges(base, { ...base, bankKb: 64 }), ['bankKb']);
 	});
 
 	test('apps use a hardware FPU', () => {
@@ -53,15 +56,15 @@ suite('Platform editor', () => {
 
 	test('writes the memory, the CPU and the peripherals as xheep_gen builds them', () => {
 		const base = formFromPlatform(general);
-		const form = { ...base, cpu: 'cv32e40p', fpu: true, bus: 'NtoM', banks: 6, codeKb: 96, ilNum: 4, ilSizeKb: 16,
+		const form = { ...base, cpu: 'cv32e40p', fpu: true, bus: 'NtoM', banks: 6, bankKb: 16, codeKb: 48, ilNum: 4, ilSizeKb: 16,
 			peripherals: [...base.peripherals.filter(p => p !== 'i2s'), 'pdm2pcm'].sort() };
 		const src = overlayConfig('my_soc', 'general.py', base, form, catalog, true);
 		for (const line of [
 			'    system.set_cpu(cv32e40p(fpu=True))',
 			'    system.set_bus_type(BusType.NtoM)',
-			'    memory_ss.add_ram_banks([32] * 6)',
+			'    memory_ss.add_ram_banks([16] * 6)',
 			'    memory_ss.add_ram_banks_il(4, 16, "interleaved_group_0")',
-			'    memory_ss.add_linker_section(LinkerSection.by_size("code", 0, 0x18000))',
+			'    memory_ss.add_linker_section(LinkerSection.by_size("code", 0, 0xc000))',
 			'    memory_ss.add_linker_section_for_banks("data_interleaved", subsections=[LinkerSubsection("xheep_data_interleaved")],',
 			'    peripherals = [p for p in user.get_peripherals() if p.get_name() not in ("i2s",)]',
 			'    peripherals += [PDM2PCM()]  # placed by the generator',

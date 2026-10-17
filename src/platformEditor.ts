@@ -91,6 +91,7 @@ function html(nonce: string, csp: string): string {
 	--seg-stack: var(--vscode-charts-orange); --seg-il: var(--vscode-charts-red); --seg-free: var(--vscode-input-background);
 	--mono: var(--vscode-editor-font-family);
 }
+[hidden] { display: none !important; }
 body { color: var(--fg); background: var(--bg); font: var(--vscode-font-size) / 1.5 var(--vscode-font-family); padding: 0 16px 0; margin: 0; }
 .wrap { max-width: 760px; margin: 0 auto; }
 header { padding: 18px 0 6px; display: grid; gap: 4px; }
@@ -121,16 +122,17 @@ input[type=number] { width: 80px; font-family: var(--mono); }
 .toggle { display: inline-flex; align-items: center; gap: 8px; }
 .stepper { display: inline-flex; align-items: center; gap: 6px; }
 .stepper button { font: inherit; width: 24px; height: 24px; border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 2px; cursor: pointer; }
-.bar { display: flex; height: 24px; border-radius: 3px; overflow: hidden; background: var(--seg-free); }
-.bar div { min-width: 0; }
-.bar .code { background: var(--seg-code); } .bar .data { background: var(--seg-data); } .bar .heap { background: var(--seg-heap); }
-.bar .stack { background: var(--seg-stack); } .bar .gap { flex: 0 0 2px; background: var(--bg); }
-.bar .il { background: repeating-linear-gradient(90deg, var(--seg-il) 0 6px, transparent 6px 8px); }
-.ticks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: .85em; color: var(--muted); margin-top: 3px; }
-.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
-.legend .v { font-family: var(--mono); color: var(--muted); }
+.mem { display: grid; gap: 10px; }
+.mrow { display: grid; grid-template-columns: 92px 1fr; gap: 2px 12px; align-items: center; }
+.mrow > b { font-weight: 600; }
+.track { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fill { display: flex; height: 20px; border-radius: 3px; overflow: hidden; gap: 2px; min-width: 4px; }
+.fill > div { min-width: 0; height: 100%; }
+.track .v { font-family: var(--mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mrow .cap { grid-column: 2; color: var(--muted); }
+.c-code { background: var(--seg-code); } .c-heap { background: var(--seg-heap); } .c-stack { background: var(--seg-stack); }
+.c-room { background: color-mix(in srgb, var(--seg-data) 35%, var(--seg-free)); } .c-full { background: var(--warn); } .c-il { background: var(--seg-il); }
+@media (max-width: 560px) { .mrow { grid-template-columns: 1fr; } .mrow .cap { grid-column: 1; } }
 .periph { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
 .periph label { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
 .periph small { display: block; color: var(--muted); }
@@ -166,24 +168,26 @@ footer .cost { color: var(--muted); flex: 1 1 260px; min-width: 0; }
 	</section>
 	<section>
 		<h2>Memory</h2>
-		<div><div class="bar" id="bar" aria-hidden="true"><div class="code"></div><div class="data"></div><div class="heap"></div><div class="stack"></div><div class="gap"></div><div class="il"></div></div><div class="ticks" id="ticks"></div></div>
-		<div class="legend" id="legend"></div>
-		<div class="row" id="mem-form">
-			<div class="lab">RAM banks</div>
-			<div><div class="stepper"><button id="banks-dn" aria-label="Fewer banks">−</button><span class="num" id="banks"></span><button id="banks-up" aria-label="More banks">+</button></div><div class="hint" id="banks-hint"></div></div>
-			<label class="lab" for="code">Code</label>
-			<div><input type="number" id="code" min="8" step="2"> KB<div class="hint">Program instructions and constants. The rest of the RAM holds data, heap and stack.</div></div>
-			<div class="lab">Interleaved banks</div>
-			<div><div style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;"><div class="seg" role="group" aria-label="Interleaved banks" id="il-num"></div>
-				<label class="toggle" for="il-size">of <select id="il-size"><option value="8">8 KB</option><option value="16">16 KB</option><option value="32">32 KB</option></select></label></div>
-				<div class="hint">Consecutive words alternate across these banks, so the DMA and accelerators read them in parallel. Put data there with <code>__attribute__((section(".xheep_data_interleaved")))</code>.</div></div>
-		</div>
+		<div class="mem" id="mem"></div>
 		<div class="hint" id="mem-custom" hidden></div>
 		<div class="row">
-			<label class="lab" for="stack">Stack</label>
-			<div><input type="number" id="stack" min="1" step="1"> KB<div class="hint" id="stack-hint"></div></div>
+			<div class="lab mem-edit">Contiguous RAM</div>
+			<div class="mem-edit"><div style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;">
+				<div class="stepper"><button id="banks-dn" aria-label="Fewer banks">−</button><span class="num" id="banks"></span><button id="banks-up" aria-label="More banks">+</button></div>
+				<label class="toggle" for="bank-size">of <select id="bank-size"><option value="8">8 KB</option><option value="16">16 KB</option><option value="32">32 KB</option><option value="64">64 KB</option></select></label></div>
+				<div class="hint" id="banks-hint"></div></div>
+			<label class="lab mem-edit" for="code">Code</label>
+			<div class="mem-edit"><input type="number" id="code" min="8" step="2"> KB<div class="hint">Program instructions and constants, at the start of the contiguous RAM.</div></div>
+			<div class="lab mem-edit">Data</div>
+			<div class="mem-edit"><span class="num" id="data-kb"></span><div class="hint">Contiguous RAM minus code: global variables, heap and stack. Change it through the RAM or the code size.</div></div>
 			<label class="lab" for="heap">Heap</label>
 			<div><input type="number" id="heap" min="0" step="1"> KB<div class="hint">Memory for <code>malloc</code>.</div></div>
+			<label class="lab" for="stack">Stack</label>
+			<div><input type="number" id="stack" min="1" step="1"> KB<div class="hint" id="stack-hint"></div></div>
+			<div class="lab mem-edit">Interleaved</div>
+			<div class="mem-edit"><div style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;"><div class="seg" role="group" aria-label="Interleaved banks" id="il-num"></div>
+				<label class="toggle" for="il-size">of <select id="il-size"><option value="8">8 KB</option><option value="16">16 KB</option><option value="32">32 KB</option><option value="64">64 KB</option></select></label></div>
+				<div class="hint">Consecutive words alternate across these banks, so the DMA and accelerators read them in parallel. Put data there with <code>__attribute__((section(".xheep_data_interleaved")))</code>.</div></div>
 		</div>
 	</section>
 	<section>
@@ -201,7 +205,7 @@ const $ = id => document.getElementById(id);
 const CPU_DOC = { cv32e20: 'small, RV32IMC. The default.', cv32e40p: 'larger and faster, optional FPU, PULP DSP instructions.',
 	cv32e40x: 'X-interface for custom coprocessors.', cv32e40px: 'cv32e40p with the X-interface.' };
 const FPU_CPUS = ['cv32e40p', 'cv32e40px'];
-const HW = ['cpu', 'fpu', 'bus', 'banks', 'ilNum', 'ilSizeKb', 'peripherals'];
+const HW = ['cpu', 'fpu', 'bus', 'banks', 'bankKb', 'ilNum', 'ilSizeKb', 'peripherals'];
 let st, f, error;
 
 window.addEventListener('message', ({ data: m }) => {
@@ -214,7 +218,6 @@ window.addEventListener('message', ({ data: m }) => {
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const kb = n => n + ' KB';
-const hex = k => '0x' + (k * 1024).toString(16).toUpperCase().padStart(5, '0');
 
 function render() {
 	const creating = st.mode === 'create';
@@ -233,27 +236,38 @@ function render() {
 	$('cpu-hint').textContent = 'Changing the CPU resets its other options to their defaults.';
 	for (const b of ['onetoM', 'NtoM']) $('bus-' + b).setAttribute('aria-pressed', String(f.bus === b));
 
-	// Memory: the bar shows the form, or the configuration as is when the form cannot represent it.
-	const banksKb = st.memoryEditable ? f.banks * 32 : st.platform.banks.reduce((a, b) => a + b, 0);
-	const il = st.memoryEditable ? f.ilNum * f.ilSizeKb : st.platform.interleaved.reduce((a, g) => a + g.num * g.sizeKb, 0);
-	$('mem-form').hidden = !st.memoryEditable;
-	$('mem-custom').hidden = st.memoryEditable;
-	$('mem-custom').textContent = 'This configuration has its own memory layout (' + st.platform.banks.map(kb).join(' + ')
-		+ (il ? ', interleaved ' + st.platform.interleaved.map(g => g.num + ' × ' + kb(g.sizeKb)).join(' + ') : '') + '): change it in its Python or HJSON file.';
-	$('banks').textContent = f.banks + ' × 32 KB = ' + kb(f.banks * 32);
-	$('banks-hint').textContent = st.boardRamKb ? '32 KB each. The ' + st.board + ' holds about ' + kb(st.boardRamKb) + ' of RAM, interleaved banks included.' : '32 KB each.';
+	// Memory: one row per use (code, data, interleaved) on one scale, from the form, or from the configuration as
+	// is when the form cannot represent it. The form below follows the same order.
+	const edit = st.memoryEditable, p = st.platform;
+	const banksKb = edit ? f.banks * f.bankKb : p.banks.reduce((a, b) => a + b, 0);
+	const groups = edit ? (f.ilNum ? [{ num: f.ilNum, sizeKb: f.ilSizeKb }] : []) : p.interleaved;
+	const il = groups.reduce((a, g) => a + g.num * g.sizeKb, 0);
+	document.querySelectorAll('.mem-edit').forEach(el => { el.hidden = !edit; });
+	$('mem-custom').hidden = edit;
+	$('mem-custom').textContent = 'This configuration has its own memory layout: change it in its Python or HJSON file.';
+	$('banks').textContent = f.banks + (f.banks > 1 ? ' banks' : ' bank');
+	$('bank-size').value = String(f.bankKb);
+	$('banks-hint').textContent = 'All the RAM for code and data: the code size takes its share, the rest is data.' + (st.boardRamKb ? ' The ' + st.board + ' holds about ' + kb(st.boardRamKb) + ' of RAM in all.' : '');
 	$('il-num').innerHTML = [0, 1, 2, 4, 8].map(n => '<button data-n="' + n + '" aria-pressed="' + (f.ilNum === n) + '">' + (n || 'None') + '</button>').join('');
 	$('il-num').querySelectorAll('button').forEach(b => b.onclick = () => { f.ilNum = Number(b.dataset.n); render(); });
 	$('il-size').value = String(f.ilSizeKb); $('il-size').disabled = !f.ilNum;
 	$('code').value = f.codeKb; $('stack').value = f.stackKb; $('heap').value = f.heapKb;
-	const data = Math.max(banksKb - f.codeKb - f.stackKb - f.heapKb, 0);
-	const parts = { code: f.codeKb, data, heap: f.heapKb, stack: f.stackKb, il };
+	const dataKb = Math.max(banksKb - f.codeKb, 0);
+	const room = dataKb - f.heapKb - f.stackKb;
+	$('data-kb').textContent = kb(f.banks * f.bankKb) + ' − ' + kb(f.codeKb) + ' = ' + kb(dataKb);
+	const scale = Math.max(f.codeKb, dataKb, ...groups.map(g => g.num * g.sizeKb), 1);
+	const seg = (cls, k) => k > 0 ? '<div class="' + cls + '" style="flex:' + k + ' 0 0"></div>' : '';
+	const row = (label, k, inner, cap) => '<div class="mrow"><b>' + label + '</b><div class="track"><div class="fill" style="width:' + (k / scale * 82)
+		+ '%">' + inner + '</div><span class="v">' + kb(k) + '</span></div><div class="cap">' + cap + '</div></div>';
+	const banksText = edit ? f.banks + ' × ' + kb(f.bankKb) : p.banks.map(kb).join(' + ');
+	$('mem').innerHTML = '<div class="hint">Contiguous RAM: ' + banksText + ' = ' + kb(banksKb) + ', shared by code and data</div>'
+		+ row('Code', f.codeKb, seg('c-code', f.codeKb), 'Instructions and constants.')
+		+ row('Data', dataKb, room >= 0 ? seg('c-heap', f.heapKb) + seg('c-stack', f.stackKb) + seg('c-room', room) : seg('c-full', dataKb),
+			room >= 0 ? 'Heap ' + kb(f.heapKb) + ' · stack ' + kb(f.stackKb) + ' · ' + kb(room) + ' left for global variables.'
+				: 'Heap and stack need ' + kb(f.heapKb + f.stackKb) + ', but only ' + kb(dataKb) + ' is left after the code.')
+		+ groups.map(g => row('Interleaved', g.num * g.sizeKb, Array.from({ length: g.num }, () => seg('c-il', g.sizeKb)).join(''),
+			g.num + ' × ' + kb(g.sizeKb) + ', after the contiguous RAM. Only the data you place there.')).join('');
 	const all = banksKb + il;
-	for (const [k, v] of Object.entries(parts)) $('bar').querySelector('.' + k).style.flex = '0 0 calc(' + Math.min(v / all, 1) * 100 + '% - ' + (k === 'il' && il ? 2 : 0) + 'px)';
-	$('bar').querySelector('.gap').hidden = !il;
-	$('ticks').innerHTML = '<span>' + hex(0) + '</span><span>' + hex(f.codeKb) + '</span><span>' + hex(banksKb) + '</span>' + (il ? '<span>' + hex(all) + '</span>' : '');
-	$('legend').innerHTML = [['code', 'Code'], ['data', 'Data'], ['heap', 'Heap'], ['stack', 'Stack'], ...(il ? [['il', 'Interleaved']] : [])]
-		.map(([k, l]) => '<span><i style="background:var(--seg-' + k + ')"></i>' + l + ' <span class="v">' + kb(parts[k]) + '</span></span>').join('');
 	const frame = st.largestFrame;
 	$('stack-hint').innerHTML = 'Local variables of all the functions running at once.';
 	if (frame && frame.bytes > f.stackKb * 1024) {
@@ -269,7 +283,7 @@ function render() {
 	});
 
 	const notes = [];
-	if (st.memoryEditable && f.codeKb + f.stackKb + f.heapKb >= f.banks * 32) notes.push(['err', 'Does not fit:', 'code, stack and heap take more than the RAM. Add banks or shrink them.']);
+	if (st.memoryEditable && f.codeKb + f.stackKb + f.heapKb >= f.banks * f.bankKb) notes.push(['err', 'Does not fit:', 'code, stack and heap take more than the RAM. Add banks or shrink them.']);
 	if (st.boardRamKb && all > st.boardRamKb) notes.push(['', 'Too big for the ' + st.board + ':', 'more than about ' + kb(st.boardRamKb) + ' of RAM does not fit its FPGA. Simulation still works.']);
 	if (il && f.bus !== 'NtoM') notes.push(['', 'Interleaved banks with a one-master bus:', 'the DMA cannot read them while the CPU runs, so they bring little. Pick the parallel bus.']);
 	if (!f.peripherals.includes('uart')) notes.push(['', 'No UART:', 'printf output goes nowhere.']);
@@ -297,6 +311,7 @@ for (const b of ['onetoM', 'NtoM']) $('bus-' + b).onclick = () => { f.bus = b; r
 $('banks-dn').onclick = () => { f.banks = Math.max(1, f.banks - 1); render(); };
 $('banks-up').onclick = () => { f.banks = Math.min(32, f.banks + 1); render(); };
 $('il-size').onchange = e => { f.ilSizeKb = Number(e.target.value); render(); };
+$('bank-size').onchange = e => { f.bankKb = Number(e.target.value); render(); };
 for (const [id, k] of [['code', 'codeKb'], ['stack', 'stackKb'], ['heap', 'heapKb']]) $(id).onchange = e => { f[k] = Math.max(0, Number(e.target.value) || 0); render(); };
 $('revert').onclick = () => { f = structuredClone(st.form); error = undefined; render(); };
 $('apply').onclick = () => { error = undefined; vscode.postMessage({ type: 'apply', form: f }); };
