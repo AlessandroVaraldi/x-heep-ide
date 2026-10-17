@@ -12,7 +12,7 @@
     "url": "https://github.com/LuigiGiuffrida98/x-heep-ide/issues"
   },
   "preview": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "engines": {
     "vscode": "^1.140.0"
   },
@@ -153,7 +153,7 @@
       },
       {
         "command": "xheep.fixTools",
-        "title": "Set Up Tools\u2026",
+        "title": "Set Up Tools…",
         "category": "X-HEEP",
         "icon": "$(tools)"
       },
