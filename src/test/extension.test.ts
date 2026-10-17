@@ -119,8 +119,11 @@ suite('Tool discovery', () => {
 	});
 
 	test('dev container runs the X-HEEP image with this extension', () => {
-		const dc = JSON.parse(tools.devcontainerJson('me.ext'));
-		assert.strictEqual(dc.image, 'ghcr.io/x-heep/x-heep/x-heep-toolchain:latest');
+		fs.writeFileSync(path.join(tmp, 'xh', 'core-v-mini-mcu.core'), 'CAPI=2:\n\nname: openhwgroup.org:systems:core-v-mini-mcu:1.0.6\n');
+		assert.strictEqual(tools.xheepImageTag(path.join(tmp, 'xh')), 'v1.0.6');
+		assert.strictEqual(tools.xheepImageTag(path.join(tmp, 'none')), 'latest');
+		const dc = JSON.parse(tools.devcontainerJson('me.ext', 'v1.0.6'));
+		assert.strictEqual(dc.image, 'ghcr.io/x-heep/x-heep/x-heep-toolchain:v1.0.6');
 		assert.deepStrictEqual(dc.customizations.vscode.extensions, ['me.ext']);
 	});
 });

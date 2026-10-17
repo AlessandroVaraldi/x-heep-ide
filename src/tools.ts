@@ -128,13 +128,23 @@ export function packageInstallCommand(pkg: string, platform = process.platform, 
 }
 
 /**
+ * Tag of X-HEEP's toolchain image matching a checkout: X-HEEP tags it v<version>, the version in
+ * core-v-mini-mcu.core (its CI does the same). `latest` lags behind the releases, so it is only the fallback.
+ */
+export function xheepImageTag(xheep: string): string {
+	const core = path.join(xheep, 'core-v-mini-mcu.core');
+	const m = fs.existsSync(core) ? /^name: \S*core-v-mini-mcu:(\S+)/m.exec(fs.readFileSync(core, 'utf8')) : null;
+	return m ? `v${m[1]}` : 'latest';
+}
+
+/**
  * Dev container on X-HEEP's toolchain image (the one its CI uses), with this extension inside.
  * The image is amd64 only: Apple Silicon runs it emulated, hence the explicit platform.
  */
-export function devcontainerJson(extensionId: string): string {
+export function devcontainerJson(extensionId: string, imageTag = 'latest'): string {
 	return JSON.stringify({
 		name: 'X-HEEP',
-		image: 'ghcr.io/x-heep/x-heep/x-heep-toolchain:latest',
+		image: `ghcr.io/x-heep/x-heep/x-heep-toolchain:${imageTag}`,
 		runArgs: ['--platform=linux/amd64'],
 		customizations: {
 			vscode: {

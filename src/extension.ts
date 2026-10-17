@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import {
 	findExecutables, findToolchains, findPythonEnvs, findConda, condaSetup, venvSetup,
 	xheepVerilatorVersion, verilatorPrefix, verilatorInstallCommand,
-	toolchainUrl, toolchainInstallCommand, packageInstallCommand, devcontainerJson,
+	toolchainUrl, toolchainInstallCommand, packageInstallCommand, devcontainerJson, xheepImageTag,
 } from './tools';
 import { Mode, MODES, JTAG_ADAPTERS, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, simSummary, incrementalBuildCommand, verilatorRunCommand,
 	DEBUG_BUILD_ROOT, debugModelBuildCommand, debugSimCommand, openocdCommand,
@@ -885,7 +885,7 @@ async function openInContainer() {
 	const file = path.join(ws.uri.fsPath, '.devcontainer', 'devcontainer.json');
 	if (!fs.existsSync(file)) {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
-		fs.writeFileSync(file, devcontainerJson(extensionId));
+		fs.writeFileSync(file, devcontainerJson(extensionId, xheepImageTag(root)));
 	}
 	return await ensureExtension('ms-vscode-remote.remote-containers', 'The X-HEEP container')
 		&& vscode.commands.executeCommand('remote-containers.reopenInContainer');
