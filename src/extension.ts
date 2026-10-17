@@ -4,11 +4,17 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFile, spawn } from 'child_process';
 import { createHash } from 'crypto';
+import {
+	findExecutables, findToolchains, findPythonEnvs, findConda, condaSetup, venvSetup,
+	xheepVerilatorVersion, verilatorPrefix, verilatorInstallCommand,
+	toolchainUrl, toolchainInstallCommand, packageInstallCommand, devcontainerJson,
+} from './tools';
 import { Mode, MODES, JTAG_ADAPTERS, Options, Simulator, SIM_MODEL, buildCommand, simCommand, simModelBuildCommand, FLASH_COMMAND, mcuGenCommand, simSummary, incrementalBuildCommand, verilatorRunCommand,
 	DEBUG_BUILD_ROOT, debugModelBuildCommand, debugSimCommand, openocdCommand,
 	XHEEP_GIT, XHEEP_COMMIT_URL, isCommit, cloneCommand, writeMain, projectSource, configTemplate } from './xheep';
 
 let extensionDir: string;
+let extensionId: string;
 let folder: vscode.WorkspaceFolder;
 /** The X-HEEP repo: the workspace itself, or `x-heep/` inside a software project. */
 let root: string;
@@ -61,9 +67,25 @@ function loadExamples(): Promise<void> {
 	}));
 }
 
+const expandHome = (p: string) => p.replace(/^~(?=$|\/)/, os.homedir());
+
 function toolchain(): string {
-	const p = cfg().get<string>('riscvToolchain') || process.env.RISCV_XHEEP || '~/.riscv';
-	return p.replace(/^~(?=$|\/)/, os.homedir());
+	return expandHome(cfg().get<string>('riscvToolchain') || process.env.RISCV_XHEEP || '~/.riscv');
+}
+
+/** A tool's executable: its `xheep.<key>` setting (the executable or its folder), else `name` from PATH. */
+function toolExe(key: string, name: string): string {
+	const p = expandHome(cfg().get<string>(key, ''));
+	if (!p) {
+		return name;
+	}
+	return fs.existsSync(p) && fs.statSync(p).isDirectory() ? path.join(p, name) : p;
+}
+
+/** Folders of the tools set in the settings, put first in PATH for every command the extension runs. */
+function toolDirs(): string[] {
+	return [toolExe('verilatorPath', 'verilator'), toolExe('openocdPath', 'openocd'), toolExe('picocomPath', 'picocom')]
+		.filter(p => path.isAbsolute(p)).map(p => path.dirname(p)).concat(path.join(toolchain(), 'bin'));
 }
 
 function findTool(suffix: string): string | undefined {
@@ -200,7 +222,10 @@ function withEnvSetup(cmd: string): string {
 
 function taskEnv(): Record<string, string> {
 	// CMake reads this env var, so every app build drops sw/build/compile_commands.json for IntelliSense.
-	return { RISCV_XHEEP: toolchain(), CMAKE_EXPORT_COMPILE_COMMANDS: 'ON' };
+	return {
+		RISCV_XHEEP: toolchain(), CMAKE_EXPORT_COMPILE_COMMANDS: 'ON',
+		PATH: [...toolDirs(), process.env.PATH ?? ''].join(path.delimiter),
+	};
 }
 
 function makeTask(name: string, cmd: string, rawShell = false, env: Record<string, string> = {}): vscode.Task {
@@ -224,8 +249,8 @@ async function runTask(task: vscode.Task): Promise<number | undefined> {
 	});
 }
 
-function sh(cmd: string): Promise<boolean> {
-	return new Promise(resolve => execFile('/bin/bash', ['-c', withEnvSetup(cmd)],
+function sh(cmd: string, setup = true): Promise<boolean> {
+	return new Promise(resolve => execFile('/bin/bash', ['-c', setup ? withEnvSetup(cmd) : cmd],
 		{ cwd: root, env: { ...process.env, ...taskEnv() } }, err => resolve(!err)));
 }
 
@@ -550,7 +575,7 @@ async function debug(app?: string) {
 	if (!await prepare({ ...o, mode: 'fpga-jtag' }) || !await compile(o) || (sim && !debugModelReady() && !await buildDebugModel())) {
 		return;
 	}
-	const openocd = cfg().get<string>('openocdPath', 'openocd');
+	const openocd = toolExe('openocdPath', 'openocd');
 	const jobs: ReturnType<typeof startJob>[] = [];
 	let stopUart = () => { };
 	let cancelled = false;
@@ -670,7 +695,7 @@ async function openSerial() {
 	vscode.window.terminals.find(t => t.name === 'X-HEEP UART')?.dispose();
 	vscode.window.createTerminal({
 		name: 'X-HEEP UART',
-		shellPath: 'picocom',
+		shellPath: toolExe('picocomPath', 'picocom'),
 		shellArgs: ['-b', String(cfg().get<number>('serialBaud', 9600)), '-r', '-l', '--imap', 'lfcrlf', port],
 	}).show(true);
 }
@@ -686,48 +711,184 @@ function mcuGen() {
 
 // --- Environment check ----------------------------------------------------
 
+type ToolId = 'python' | 'toolchain' | 'verilator' | 'openocd' | 'picocom';
+interface Check { id: ToolId; label: string; usedBy: string; ok: boolean }
+
+async function runChecks(): Promise<Check[]> {
+	const questa = cfg().get<Simulator>('simulator', 'verilator') === 'questasim';
+	return [
+		{ id: 'python', label: 'Python environment (fusesoc)', usedBy: 'every build', ok: await sh('command -v fusesoc') },
+		{ id: 'toolchain', label: 'RISC-V toolchain', usedBy: 'compiling and debugging apps', ok: !!findTool('-elf-gcc') && !!findTool('-elf-gdb') },
+		{ id: 'verilator', label: questa ? 'Questasim (vsim)' : 'Verilator', usedBy: 'Simulation', ok: await sh(`command -v ${questa ? 'vsim' : 'verilator'}`, false) },
+		{ id: 'openocd', label: 'OpenOCD', usedBy: 'debugging', ok: await sh(`command -v '${toolExe('openocdPath', 'openocd')}'`, false) },
+		{ id: 'picocom', label: 'picocom', usedBy: 'the FPGA serial output', ok: await sh(`command -v '${toolExe('picocomPath', 'picocom')}'`, false) },
+	];
+}
+
 async function checkEnv(quiet = false) {
-	const fixes: { label: string; run: () => unknown }[] = [];
-	const lines: string[] = [];
-	const report = (ok: boolean, what: string, hint = '') => lines.push(`${ok ? '✓' : '✗'} ${what}${ok || !hint ? '' : `  -> ${hint}`}`);
-
-	const envOk = await sh('true');
-	report(envOk, `Environment setup: ${cfg().get('envSetup') || '(none)'}`, 'run "make conda" or edit "xheep.envSetup"');
-	if (!envOk) {
-		fixes.push({ label: 'Create environment', run: () => runTask(makeTask('make conda', 'make conda', true)).then(() => checkEnv()) });
-	}
-
-	const gcc = findTool('-elf-gcc');
-	report(!!gcc, `RISC-V toolchain in ${toolchain()}`, 'install CORE-V GCC and set "xheep.riscvToolchain"');
-	report(!!findTool('-elf-gdb'), 'RISC-V GDB');
-	if (!gcc) {
-		fixes.push({ label: 'Set toolchain path', run: () => vscode.commands.executeCommand('workbench.action.openSettings', 'xheep.riscvToolchain') });
-	}
-
-	lines.push(`  Platform config: ${configPath()} (${platformReady() ? 'generated' : 'regenerated on the next build'})`);
-
-	if (envOk) {
-		const sim = cfg().get<Simulator>('simulator', 'verilator') === 'questasim' ? 'vsim' : 'verilator';
-		const tools: [string, string][] = [['fusesoc', 'all modes'], [sim, 'Simulation'],
-			[cfg().get<string>('openocdPath', 'openocd'), 'FPGA · JTAG Debug'], ['picocom', 'FPGA serial output']];
-		for (const [tool, usedBy] of tools) {
-			report(await sh(`command -v ${tool}`), `${tool} (${usedBy})`, 'not on PATH');
-		}
-	}
-
+	const checks = await runChecks();
 	output.appendLine(`X-HEEP environment check (${root})`);
-	lines.forEach(l => output.appendLine(l));
-	const failed = lines.filter(l => l.startsWith('✗')).length;
-	if (failed) {
-		const choice = await vscode.window.showWarningMessage(`X-HEEP: ${failed} environment problem(s) found.`,
-			'Show details', ...fixes.map(f => f.label));
-		if (choice === 'Show details') {
-			output.show();
+	checks.forEach(c => output.appendLine(`${c.ok ? '✓' : '✗'} ${c.label} (${c.usedBy})`));
+	output.appendLine(`  Platform config: ${configPath()} (${platformReady() ? 'generated' : 'regenerated on the next build'})`);
+	const missing = checks.filter(c => !c.ok);
+	if (!missing.length) {
+		if (!quiet) {
+			vscode.window.showInformationMessage('X-HEEP: all tools found.');
 		}
-		fixes.find(f => f.label === choice)?.run();
-	} else if (!quiet) {
-		vscode.window.showInformationMessage('X-HEEP: environment OK.');
+		return;
 	}
+	const choice = await vscode.window.showWarningMessage(`X-HEEP: not found: ${missing.map(c => c.label).join(', ')}.`, 'Fix…', 'Show details');
+	if (choice === 'Fix…') {
+		await fixTools();
+	} else if (choice === 'Show details') {
+		output.show();
+	}
+}
+
+/** Walks the user through each missing tool until all are found or they give up. */
+async function fixTools() {
+	for (; ;) {
+		const missing = (await runChecks()).filter(c => !c.ok);
+		if (!missing.length) {
+			vscode.window.showInformationMessage('X-HEEP: all tools found.');
+			return;
+		}
+		const picked = await vscode.window.showQuickPick(missing.map(c => ({ label: c.label, detail: `Needed for ${c.usedBy}`, c })),
+			{ placeHolder: 'X-HEEP: which tool do you want to set up?' });
+		if (!picked || !await fixTool(picked.c)) {
+			return;
+		}
+	}
+}
+
+const setGlobal = (key: string, value: string) => cfg().update(key, value, vscode.ConfigurationTarget.Global);
+
+/** Offers the found candidates, a manual pick, an install and the container for one tool; false if dismissed. */
+async function fixTool(c: Check): Promise<boolean> {
+	type Action = vscode.QuickPickItem & { run?: () => Thenable<unknown> | Promise<unknown> };
+	const sep = (label: string): Action => ({ label, kind: vscode.QuickPickItemKind.Separator });
+	const settingFor: Partial<Record<ToolId, string>> = { verilator: 'verilatorPath', openocd: 'openocdPath', picocom: 'picocomPath' };
+	let found: Action[] = [];
+	let locate: Action | undefined;
+	let install: { cmd: string; done: () => Thenable<unknown>; note?: string } | undefined;
+
+	if (c.id === 'python') {
+		found = findPythonEnvs(root).map(e => ({ label: e.label, detail: e.setup, run: () => setGlobal('envSetup', e.setup) }));
+		locate = {
+			label: '$(terminal) Use a setup script or command…', detail: 'e.g. a lab script or "module load", run before every command',
+			run: async () => {
+				const v = await vscode.window.showInputBox({ prompt: 'Shell command that activates the X-HEEP Python environment', value: cfg().get('envSetup') });
+				return v !== undefined && setGlobal('envSetup', v);
+			},
+		};
+		const conda = findConda();
+		install = conda
+			? { cmd: `PATH='${path.dirname(conda)}':$PATH make conda`, done: () => setGlobal('envSetup', condaSetup(conda, 'x-heep')) }
+			: { cmd: 'make venv', done: () => setGlobal('envSetup', venvSetup(path.join(root, '.venv'))) };
+	} else if (c.id === 'toolchain') {
+		found = findToolchains().map(d => ({ label: d, run: () => setGlobal('riscvToolchain', d) }));
+		locate = {
+			label: '$(folder-opened) Locate…', detail: 'The folder that contains bin/riscv32-…-elf-gcc',
+			run: async () => {
+				const d = (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: 'Use this toolchain' }))?.[0]?.fsPath;
+				return d && setGlobal('riscvToolchain', d);
+			},
+		};
+		const url = toolchainUrl();
+		const dest = path.join(os.homedir(), '.riscv');
+		if (url) {
+			install = { cmd: toolchainInstallCommand(url, dest), done: () => setGlobal('riscvToolchain', dest) };
+		}
+	} else if (settingFor[c.id]) {
+		const key = settingFor[c.id]!;
+		found = findExecutables(c.id).map(p => ({ label: p, run: () => setGlobal(key, p) }));
+		locate = {
+			label: '$(folder-opened) Locate…', detail: `The ${c.id} executable`,
+			run: async () => {
+				const p = (await vscode.window.showOpenDialog({ canSelectFiles: true, openLabel: `Use this ${c.id}` }))?.[0]?.fsPath;
+				return p && setGlobal(key, p);
+			},
+		};
+		if (c.id === 'verilator') {
+			// Package managers ship other versions: build the one X-HEEP uses, as its setup guide does.
+			const version = xheepVerilatorVersion(root);
+			install = {
+				cmd: verilatorInstallCommand(version),
+				done: () => setGlobal(key, path.join(verilatorPrefix(version), 'bin', 'verilator')),
+				note: `Builds Verilator ${version} from source into ${verilatorPrefix(version)}, as in X-HEEP's setup guide. `
+					+ 'Needs git, autoconf, flex, bison and g++ 13 or newer, and takes several minutes.',
+			};
+		} else {
+			const cmd = packageInstallCommand(c.id);
+			if (cmd) {
+				install = { cmd, done: () => Promise.resolve() };
+			}
+		}
+	}
+
+	const items: Action[] = [
+		...(found.length ? [sep('Found on this computer'), ...found] : []),
+		sep('Other options'),
+		...(locate ? [locate] : []),
+		...(install ? [{
+			label: '$(cloud-download) Install…', detail: install.cmd,
+			run: async () => {
+				const ok = await vscode.window.showWarningMessage(`Install ${c.label}?`, { modal: true, detail: `${install!.note ? install!.note + '\n\n' : ''}This runs in a terminal:\n${install!.cmd}` }, 'Install');
+				if (ok && await runTask(makeTask(`Install ${c.label}`, install!.cmd, true)) === 0) {
+					await install!.done();
+				}
+			},
+		}] : []),
+		{ label: '$(vm) Use the X-HEEP container instead…', detail: 'All tools preinstalled, via Docker or WSL; simulation only, no FPGA', run: openInContainer },
+	];
+	const action = await vscode.window.showQuickPick(items, { placeHolder: `${c.label}: how do you want to set it up?` });
+	if (!action?.run) {
+		return false;
+	}
+	await action.run();
+	return true;
+}
+
+// --- Containers -------------------------------------------------------------
+
+async function ensureExtension(id: string, why: string): Promise<boolean> {
+	if (vscode.extensions.getExtension(id)) {
+		return true;
+	}
+	if (await vscode.window.showInformationMessage(`${why} needs the ${id} extension.`, 'Install') !== 'Install') {
+		return false;
+	}
+	await vscode.commands.executeCommand('workbench.extensions.installExtension', id);
+	return true;
+}
+
+/**
+ * Reopens the project where the X-HEEP tools are ready: WSL (Windows) or a Dev Container on X-HEEP's
+ * toolchain image. VS Code and this extension then run in Linux, unchanged.
+ */
+async function openInContainer() {
+	const ws = vscode.workspace.workspaceFolders?.[0];
+	if (!ws) {
+		return;
+	}
+	const wsl = process.platform === 'win32' && (await vscode.window.showQuickPick([
+		{ label: 'WSL', detail: 'Reopen in your Linux distribution; then set the tools up there (recommended)', wsl: true },
+		{ label: 'Docker container', detail: 'X-HEEP toolchain image, everything preinstalled; needs Docker Desktop', wsl: false },
+	], { placeHolder: 'Where should X-HEEP run?' }))?.wsl;
+	if (wsl === undefined && process.platform === 'win32') {
+		return;
+	}
+	if (wsl) {
+		return await ensureExtension('ms-vscode-remote.remote-wsl', 'Opening in WSL')
+			&& vscode.commands.executeCommand('remote-wsl.reopenInWSL');
+	}
+	const file = path.join(ws.uri.fsPath, '.devcontainer', 'devcontainer.json');
+	if (!fs.existsSync(file)) {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, devcontainerJson(extensionId));
+	}
+	return await ensureExtension('ms-vscode-remote.remote-containers', 'The X-HEEP container')
+		&& vscode.commands.executeCommand('remote-containers.reopenInContainer');
 }
 
 // --- UI ---------------------------------------------------------------------
@@ -818,9 +979,12 @@ const isXheep = (dir: string) => fs.existsSync(path.join(dir, 'util', 'xheep_gen
 
 export function activate(context: vscode.ExtensionContext) {
 	extensionDir = context.extensionPath;
+	extensionId = context.extension.id;
 	output = vscode.window.createOutputChannel('X-HEEP');
 	uart = vscode.window.createOutputChannel('X-HEEP UART');
-	context.subscriptions.push(output, uart, vscode.commands.registerCommand('xheep.newProject', newProject));
+	context.subscriptions.push(output, uart,
+		vscode.commands.registerCommand('xheep.newProject', newProject),
+		vscode.commands.registerCommand('xheep.openInContainer', openInContainer));
 	// Either X-HEEP itself is open, or a software project with X-HEEP in x-heep/.
 	const found = vscode.workspace.workspaceFolders?.find(f => isXheep(f.uri.fsPath) || isXheep(path.join(f.uri.fsPath, 'x-heep')));
 	if (!found) {
@@ -829,6 +993,12 @@ export function activate(context: vscode.ExtensionContext) {
 		return;
 	}
 	folder = found;
+	// The tools and every command assume Linux or macOS: on Windows, offer WSL or the container.
+	if (process.platform === 'win32') {
+		vscode.window.showWarningMessage('X-HEEP needs Linux tools: reopen this folder in WSL or in the X-HEEP container.', 'Reopen…')
+			.then(pick => pick && openInContainer());
+		return;
+	}
 	const dir = folder.uri.fsPath;
 	root = isXheep(dir) ? dir : path.join(dir, 'x-heep');
 	swRoot = path.join(dir, 'sw');
@@ -874,6 +1044,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('xheep.newConfig', newConfig),
 		vscode.commands.registerCommand('xheep.buildSimModel', buildSimModel),
 		vscode.commands.registerCommand('xheep.checkEnv', () => checkEnv()),
+		vscode.commands.registerCommand('xheep.fixTools', fixTools),
 		vscode.commands.registerCommand('xheep.refreshApps', () => apps.refresh()),
 	);
 
