@@ -289,3 +289,59 @@ suite('Updating X-HEEP', () => {
 		assert.strictEqual(updateCommand('abc', ['hw/top.sv']), "git checkout -q -- 'hw/top.sv' && git fetch -q --depth 1 origin abc && git checkout -q FETCH_HEAD");
 	});
 });
+
+suite('Tool discovery', () => {
+	const fs = require('fs') as typeof import('fs');
+	const path = require('path') as typeof import('path');
+	const os = require('os') as typeof import('os');
+	const tools = require('../tools') as typeof import('../tools');
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'xheep-tools-'));
+	const exe = (p: string) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, ''); fs.chmodSync(p, 0o755); };
+
+	test('finds executables in globbed install dirs', () => {
+		exe(path.join(tmp, 'tools', 'verilator', 'v5', 'bin', 'verilator'));
+		fs.writeFileSync(path.join(tmp, 'tools', 'verilator', 'v5', 'bin', 'picocom'), ''); // not executable
+		assert.deepStrictEqual(tools.findExecutables('verilator', [`${tmp}/tools/*/*/bin`]), [path.join(tmp, 'tools', 'verilator', 'v5', 'bin', 'verilator')]);
+		assert.deepStrictEqual(tools.findExecutables('picocom', [`${tmp}/tools/*/*/bin`]), []);
+	});
+
+	test('finds toolchains and conda envs with fusesoc', () => {
+		exe(path.join(tmp, 'riscv', 'bin', 'riscv32-corev-elf-gcc'));
+		assert.deepStrictEqual(tools.findToolchains([`${tmp}/*`]), [path.join(tmp, 'riscv')]);
+		exe(path.join(tmp, 'mf', 'bin', 'conda'));
+		exe(path.join(tmp, 'mf', 'envs', 'x-heep', 'bin', 'fusesoc'));
+		fs.mkdirSync(path.join(tmp, 'mf', 'envs', 'other'), { recursive: true });
+		const envs = tools.findPythonEnvs(path.join(tmp, 'nope'), [path.join(tmp, 'mf')]);
+		assert.deepStrictEqual(envs.map(e => e.setup), [tools.condaSetup(path.join(tmp, 'mf', 'bin', 'conda'), 'x-heep')]);
+	});
+
+	test('picks the Embecosm toolchain for the platform', () => {
+		assert.ok(tools.toolchainUrl('darwin', 'arm64')!.endsWith('corev-gcc-macos-arm64/8/artifact/corev-openhw-gcc-macos-20240530.dmg'));
+		assert.ok(tools.toolchainUrl('linux', 'x64', 'ID=ubuntu\nVERSION_ID="20.04"\n')!.includes('ubuntu2004-20240530.tar.gz'));
+		assert.ok(tools.toolchainUrl('linux', 'x64', 'ID="rocky"\nVERSION_ID="9.3"\n')!.includes('corev-gcc-rocky9/48/'));
+		assert.ok(tools.toolchainUrl('linux', 'x64', 'ID=debian\nVERSION_ID="12"\n')!.includes('ubuntu2204-20240530.tar.gz'));
+		assert.strictEqual(tools.toolchainUrl('linux', 'arm64', ''), undefined);
+		assert.ok(tools.toolchainInstallCommand('https://x/t.dmg', '/d').includes('hdiutil attach'));
+		assert.ok(tools.toolchainInstallCommand('https://x/t.tar.gz', '/d').includes("tar -xz -C '/d' --strip-components=1"));
+	});
+
+	test('Verilator is built as in the X-HEEP setup guide, at the version X-HEEP uses', () => {
+		fs.mkdirSync(path.join(tmp, 'xh', 'util', 'docker'), { recursive: true });
+		fs.writeFileSync(path.join(tmp, 'xh', 'util', 'docker', 'dockerfile'), 'ARG riscv=/tools/riscv\nARG verilator_version=v5.042\n');
+		assert.strictEqual(tools.xheepVerilatorVersion(path.join(tmp, 'xh')), '5.042');
+		assert.strictEqual(tools.xheepVerilatorVersion(path.join(tmp, 'none')), '5.040');
+		const cmd = tools.verilatorInstallCommand('5.042');
+		assert.ok(cmd.includes('--branch v5.042 https://github.com/verilator/verilator.git'));
+		assert.ok(cmd.includes(`./configure --prefix='${path.join(os.homedir(), 'tools', 'verilator', '5.042')}'`));
+		assert.ok(cmd.includes('autoconf') && cmd.includes('make install'));
+	});
+
+	test('dev container runs the X-HEEP image with this extension', () => {
+		fs.writeFileSync(path.join(tmp, 'xh', 'core-v-mini-mcu.core'), 'CAPI=2:\n\nname: openhwgroup.org:systems:core-v-mini-mcu:1.0.6\n');
+		assert.strictEqual(tools.xheepImageTag(path.join(tmp, 'xh')), 'v1.0.6');
+		assert.strictEqual(tools.xheepImageTag(path.join(tmp, 'none')), 'latest');
+		const dc = JSON.parse(tools.devcontainerJson('me.ext', 'v1.0.6'));
+		assert.strictEqual(dc.image, 'ghcr.io/x-heep/x-heep/x-heep-toolchain:v1.0.6');
+		assert.deepStrictEqual(dc.customizations.vscode.extensions, ['me.ext']);
+	});
+});

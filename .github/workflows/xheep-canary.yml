@@ -23,6 +23,7 @@ jobs:
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
       run: ${{ steps.sha.outputs.run }}
+      image: ${{ steps.image.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - id: sha
@@ -38,13 +39,18 @@ jobs:
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
+      - id: image
+        # X-HEEP tags its toolchain image v<version>, the version in core-v-mini-mcu.core; `latest` lags behind.
+        run: |
+          v=$(curl -fsSL "https://raw.githubusercontent.com/x-heep/x-heep/${{ steps.sha.outputs.sha }}/core-v-mini-mcu.core" | sed -n 's/^name: .*core-v-mini-mcu:\(.*\)/\1/p')
+          echo "tag=v${v:?no version in core-v-mini-mcu.core}" >> "$GITHUB_OUTPUT"
 
   e2e:
     needs: check
     if: needs.check.outputs.run == 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/x-heep/x-heep/x-heep-toolchain:latest
+      image: ghcr.io/x-heep/x-heep/x-heep-toolchain:${{ needs.check.outputs.image }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

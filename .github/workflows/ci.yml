@@ -20,12 +20,27 @@ jobs:
       # The tests run inside a VS Code instance, which needs a display.
       - run: xvfb-run -a npm test
 
-  # The extension's steps for a software project, run against the latest X-HEEP
+  image:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.image.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ref
+        run: echo "ref=$(cat XHEEP_COMMIT | grep . || echo main)" >> "$GITHUB_OUTPUT"
+      - id: image
+        # X-HEEP tags its toolchain image v<version>, the version in core-v-mini-mcu.core; `latest` lags behind.
+        run: |
+          v=$(curl -fsSL "https://raw.githubusercontent.com/x-heep/x-heep/${{ steps.ref.outputs.ref }}/core-v-mini-mcu.core" | sed -n 's/^name: .*core-v-mini-mcu:\(.*\)/\1/p')
+          echo "tag=v${v:?no version in core-v-mini-mcu.core}" >> "$GITHUB_OUTPUT"
+
+  # The extension's steps for a software project, run against the pinned X-HEEP
   # in the image X-HEEP's own CI uses: clone, mcu-gen, build, Verilator model, simulation.
   e2e:
+    needs: image
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/x-heep/x-heep/x-heep-toolchain:latest
+      image: ghcr.io/x-heep/x-heep/x-heep-toolchain:${{ needs.image.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

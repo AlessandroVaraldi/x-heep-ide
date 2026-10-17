@@ -12,7 +12,7 @@
     "url": "https://github.com/LuigiGiuffrida98/x-heep-ide/issues"
   },
   "preview": true,
-  "version": "0.0.1",
+  "version": "0.2.0",
   "engines": {
     "vscode": "^1.140.0"
   },
@@ -176,6 +176,18 @@
         "icon": "$(pulse)"
       },
       {
+        "command": "xheep.fixTools",
+        "title": "Set Up Tools…",
+        "category": "X-HEEP",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "xheep.openInContainer",
+        "title": "Reopen in X-HEEP Container (Docker / WSL)",
+        "category": "X-HEEP",
+        "icon": "$(vm)"
+      },
+      {
         "command": "xheep.refreshApps",
         "title": "Refresh Applications",
         "category": "X-HEEP",
@@ -257,14 +269,24 @@
           "group": "4_help@1"
         },
         {
+          "command": "xheep.fixTools",
+          "when": "view == xheep.apps && xheep.active",
+          "group": "4_help@2"
+        },
+        {
+          "command": "xheep.openInContainer",
+          "when": "view == xheep.apps",
+          "group": "4_help@3"
+        },
+        {
           "command": "xheep.updateXheep",
           "when": "view == xheep.apps && xheep.active",
-          "group": "4_help@1.5"
+          "group": "4_help@3.5"
         },
         {
           "command": "xheep.openDocs",
           "when": "view == xheep.apps && xheep.active",
-          "group": "4_help@2"
+          "group": "4_help@4"
         }
       ],
       "view/item/context": [
@@ -374,12 +396,14 @@
         "xheep.envSetup": {
           "type": "string",
           "default": "eval \"$(conda shell.bash hook)\" && conda activate x-heep",
-          "markdownDescription": "Bash snippet run before every `make` call to activate the X-HEEP Python environment. Leave empty to use the repo `.venv`."
+          "markdownDescription": "Bash snippet run before every `make` call to activate the X-HEEP Python environment. Leave empty to use the repo `.venv`.",
+          "scope": "machine"
         },
         "xheep.riscvToolchain": {
           "type": "string",
           "default": "",
-          "markdownDescription": "RISC-V toolchain install path (`RISCV_XHEEP`). Empty: use `$RISCV_XHEEP` or `~/.riscv`."
+          "markdownDescription": "RISC-V toolchain install path (`RISCV_XHEEP`). Empty: use `$RISCV_XHEEP` or `~/.riscv`.",
+          "scope": "machine"
         },
         "xheep.compiler": {
           "type": "string",
@@ -450,7 +474,8 @@
         "xheep.openocdPath": {
           "type": "string",
           "default": "openocd",
-          "description": "OpenOCD executable."
+          "description": "OpenOCD executable (or its folder).",
+          "scope": "machine"
         },
         "xheep.openocdConfig": {
           "type": "string",
@@ -471,6 +496,18 @@
           "type": "number",
           "default": 9600,
           "description": "UART baud rate."
+        },
+        "xheep.verilatorPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Verilator executable (or its folder). Empty: `verilator` from PATH. Set by **X-HEEP: Set Up Tools**."
+        },
+        "xheep.picocomPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "picocom executable (or its folder). Empty: `picocom` from PATH."
         }
       }
     },
