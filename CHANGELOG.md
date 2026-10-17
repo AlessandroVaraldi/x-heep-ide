@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.2.0
+
+- Tested with X-HEEP [8759d1b](https://github.com/x-heep/x-heep/commit/8759d1b4760c95f7bcc0490afb27b7f41960aabd).
+
 ## 0.0.1 (preview)
 
 - Applications view: your apps and the X-HEEP examples, new app and new file.
